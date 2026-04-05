@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LoRa Gateway — Cảm biến</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>IUH LoRa</h1>
+        <p class="topic" id="mqttTopic"></p>
+      </div>
+      <div class="tabs">
+        <button type="button" class="tab active" data-tab="cam-bien">Cảm biến</button>
+      </div>
+      <div class="sensor-list" id="sensorList">
+        <p class="empty-hint">Đang chờ dữ liệu MQTT…</p>
+      </div>
+      <div class="status-bar" id="statusBar">—</div>
+    </aside>
+    <main class="main">
+      <h2>Biểu đồ theo node</h2>
+      <div class="chart-grid">
+        <div class="chart-box">
+          <h3>Nhiệt độ (°C)</h3>
+          <canvas id="chartTemp"></canvas>
+        </div>
+        <div class="chart-box">
+          <h3>Độ ẩm (%)</h3>
+          <canvas id="chartHum"></canvas>
+        </div>
+        <div class="chart-box">
+          <h3>So sánh RSSI (dBm) — cường độ tín hiệu</h3>
+          <canvas id="chartRssiBar"></canvas>
+        </div>
+        <div class="chart-box">
+          <h3>RSSI theo thời gian</h3>
+          <canvas id="chartRssiLine"></canvas>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script>
+    const COLORS = [
+      "#3d9cf0", "#4ade80", "#f472b6", "#fbbf24", "#a78bfa", "#22d3ee", "#fb923c"
+    ];
+
+    function qualityClass(q) {
+      if (!q) return "";
+      const s = String(q).toLowerCase();
+      if (s.includes("excellent")) return "quality-excellent";
+      if (s.includes("good")) return "quality-good";
+      if (s.includes("fair")) return "quality-fair";
+      if (s.includes("poor") || s.includes("weak")) return "quality-poor";
+      if (s.includes("very")) return "quality-very";
+      return "";
+    }
+
+    function renderSidebar(nodes) {
+      const el = document.getElementById("sensorList");
+      const ids = Object.keys(nodes).sort();
+      if (!ids.length) {
+        el.innerHTML = '<p class="empty-hint">Chưa có node. Kiểm tra broker và topic.</p>';
+        return;
+      }
+      el.innerHTML = ids.map((id) => {
+        const L = nodes[id].latest;
+        if (!L) return "";
+        const q = L.signal_quality || "";
+        const qc = qualityClass(q);
+        return `
+          <article class="sensor-card">
+            <h3>${id}</h3>
+            <dl>
+              <dt>Nhiệt độ</dt><dd>${L.temperature != null ? L.temperature.toFixed(1) + " °C" : "—"}</dd>
+              <dt>Độ ẩm</dt><dd>${L.humidity != null ? L.humidity.toFixed(1) + " %" : "—"}</dd>
+              <dt>RSSI</dt><dd>${L.rssi != null ? L.rssi + " dBm" : "—"}</dd>
+              <dt>SNR</dt><dd>${L.snr != null ? L.snr.toFixed(2) + " dB" : "—"}</dd>
+              <dt>Chất lượng</dt><dd class="${qc}">${q || "—"}</dd>
+            </dl>
+          </article>`;
+      }).join("");
+    }
+
+    let chartTemp, chartHum, chartRssiBar, chartRssiLine;
+
+    function ensureCharts() {
+      const common = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: "#8b9cb3" } } },
+        scales: {
+          x: { ticks: { color: "#8b9cb3", maxRotation: 0 }, grid: { color: "#2d3a4f" } },
+          y: { ticks: { color: "#8b9cb3" }, grid: { color: "#2d3a4f" } }
+        }
+      };
+      if (!chartTemp) {
+        chartTemp = new Chart(document.getElementById("chartTemp"), {
+          type: "line",
+          data: { datasets: [] },
+          options: { ...common, scales: { ...common.scales, y: { ...common.scales.y, title: { display: true, text: "°C", color: "#8b9cb3" } } } }
+        });
+      }
+      if (!chartHum) {
+        chartHum = new Chart(document.getElementById("chartHum"), {
+          type: "line",
+          data: { datasets: [] },
+          options: { ...common, scales: { ...common.scales, y: { ...common.scales.y, title: { display: true, text: "%", color: "#8b9cb3" } } } }
+        });
+      }
+      if (!chartRssiBar) {
+        chartRssiBar = new Chart(document.getElementById("chartRssiBar"), {
+          type: "bar",
+          data: { labels: [], datasets: [{ label: "RSSI (dBm)", data: [], backgroundColor: [] }] },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: "#8b9cb3" }, grid: { color: "#2d3a4f" } },
+              y: { ticks: { color: "#8b9cb3" }, grid: { color: "#2d3a4f" }, title: { display: true, text: "dBm (cao hơn = tín hiệu mạnh hơn)", color: "#8b9cb3" } }
+            }
+          }
+        });
+      }
+      if (!chartRssiLine) {
+        chartRssiLine = new Chart(document.getElementById("chartRssiLine"), {
+          type: "line",
+          data: { datasets: [] },
+          options: {
+            ...common,
+            scales: {
+              ...common.scales,
+              y: { ...common.scales.y, title: { display: true, text: "dBm", color: "#8b9cb3" } }
+            }
+          }
+        });
+      }
+    }
+
+    function shortTime(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      return d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    }
+
+    function updateCharts(nodes) {
+      ensureCharts();
+      const ids = Object.keys(nodes).sort();
+      const labelsMaster = [];
+      const byId = {};
+      ids.forEach((id, idx) => {
+        const hist = nodes[id].history || [];
+        byId[id] = { hist, color: COLORS[idx % COLORS.length] };
+        hist.forEach((p) => {
+          if (!labelsMaster.includes(p.t)) labelsMaster.push(p.t);
+        });
+      });
+      labelsMaster.sort();
+      const labelsShort = labelsMaster.map(shortTime);
+
+      const tempDatasets = ids.map((id) => ({
+        label: id,
+        data: labelsMaster.map((t) => {
+          const h = byId[id].hist;
+          const pt = h.find((x) => x.t === t);
+          return pt ? pt.temperature : null;
+        }),
+        borderColor: byId[id].color,
+        backgroundColor: byId[id].color + "33",
+        spanGaps: true,
+        tension: 0.2
+      }));
+      chartTemp.data.labels = labelsShort;
+      chartTemp.data.datasets = tempDatasets;
+      chartTemp.update("none");
+
+      const humDatasets = ids.map((id) => ({
+        label: id,
+        data: labelsMaster.map((t) => {
+          const h = byId[id].hist;
+          const pt = h.find((x) => x.t === t);
+          return pt ? pt.humidity : null;
+        }),
+        borderColor: byId[id].color,
+        backgroundColor: byId[id].color + "33",
+        spanGaps: true,
+        tension: 0.2
+      }));
+      chartHum.data.labels = labelsShort;
+      chartHum.data.datasets = humDatasets;
+      chartHum.update("none");
+
+      const barLabels = [];
+      const barVals = [];
+      const barColors = [];
+      ids.forEach((id) => {
+        const L = nodes[id].latest;
+        if (L && L.rssi != null) {
+          barLabels.push(id);
+          barVals.push(L.rssi);
+          barColors.push(byId[id].color);
+        }
+      });
+      chartRssiBar.data.labels = barLabels;
+      chartRssiBar.data.datasets[0].data = barVals;
+      chartRssiBar.data.datasets[0].backgroundColor = barColors;
+      chartRssiBar.update("none");
+
+      const rssiLineDatasets = ids.map((id) => ({
+        label: id + " RSSI",
+        data: labelsMaster.map((t) => {
+          const h = byId[id].hist;
+          const pt = h.find((x) => x.t === t);
+          return pt ? pt.rssi : null;
+        }),
+        borderColor: byId[id].color,
+        backgroundColor: "transparent",
+        spanGaps: true,
+        tension: 0.2
+      }));
+      chartRssiLine.data.labels = labelsShort;
+      chartRssiLine.data.datasets = rssiLineDatasets;
+      chartRssiLine.update("none");
+    }
+
+    async function poll() {
+      try {
+        const r = await fetch("/api/state");
+        const j = await r.json();
+        document.getElementById("mqttTopic").textContent = "Topic: " + (j.topic || "");
+        renderSidebar(j.nodes || {});
+        updateCharts(j.nodes || {});
+        document.getElementById("statusBar").textContent =
+          "Cập nhật: " + new Date().toLocaleTimeString("vi-VN");
+      } catch (e) {
+        document.getElementById("statusBar").textContent = "Lỗi kết nối API";
+      }
+    }
+
+    document.getElementById("mqttTopic").textContent = "Topic: {{ mqtt_topic }}";
+    ensureCharts();
+    poll();
+    setInterval(poll, 1500);
+  </script>
+</body>
+</html>
