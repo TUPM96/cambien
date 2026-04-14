@@ -43,6 +43,13 @@ struct LoRaQuality {
 String lastSensorId = "---";
 float lastTemp = 0;
 float lastHum = 0;
+float lastWaterTemp = 0;
+float lastTds = 0;
+bool lastAirValid = false;
+bool lastHumValid = false;
+bool lastWaterValid = false;
+bool lastTdsValid = false;
+uint8_t lastValidMask = 0;
 int lastRssi = 0;
 float lastSnr = 0;
 bool hasData = false;
@@ -51,7 +58,7 @@ bool hasData = false;
 void updateLCDStatus();
 void updateLCDData();
 void reconnectMQTT();
-void sendToMQTT(String sensorId, float temp, float hum, int rssi, float snr, int packetId);
+void sendToMQTT(String sensorId, float temp, float hum, float waterTemp, float tds, uint8_t validMask, int rssi, float snr, int packetId);
 void parseAndSend(String data, int rssi, float snr);
 void checkPacketLoss();
 
@@ -136,16 +143,24 @@ void updateLCDStatus() {
 void updateLCDData() {
   lcd.clear();
   
-  // Dòng 1: Cảm biến và nhiệt độ
+  // Dòng 1: Cảm biến + nhiet do khong khi
   lcd.setCursor(0, 0);
   lcd.print(lastSensorId + " ");
-  lcd.print(String(lastTemp, 1) + "C");
+  if (lastAirValid) {
+    lcd.print("A:" + String(lastTemp, 1));
+  } else {
+    lcd.print("A:ERR");
+  }
   
-  // Dòng 2: Độ ẩm và RSSI
+  // Dòng 2: TDS + RSSI
   lcd.setCursor(0, 1);
-  lcd.print("H:" + String(lastHum, 1) + "%");
+  if (lastTdsValid) {
+    lcd.print("TDS:" + String(lastTds, 0));
+  } else {
+    lcd.print("TDS:ERR");
+  }
   
-  lcd.setCursor(10, 1);
+  lcd.setCursor(12, 1);
   lcd.printf("R:%d", lastRssi);
 }
 
@@ -172,7 +187,7 @@ void reconnectMQTT() {
   }
 }
 
-void sendToMQTT(String sensorId, float temp, float hum, int rssi, float snr, int packetId) {
+void sendToMQTT(String sensorId, float temp, float hum, float waterTemp, float tds, uint8_t validMask, int rssi, float snr, int packetId) {
   if (!client.connected()) {
     reconnectMQTT();
   }
@@ -182,12 +197,21 @@ void sendToMQTT(String sensorId, float temp, float hum, int rssi, float snr, int
     return;
   }
   
-  StaticJsonDocument<256> doc;
+  StaticJsonDocument<384> doc;
   doc["sensor_id"] = sensorId;
   doc["temperature"] = temp;
   doc["humidity"] = hum;
+  doc["water_temperature"] = waterTemp;
+  doc["tds"] = tds;
   doc["timestamp"] = millis();
   doc["packet_id"] = packetId;
+  doc["valid_mask"] = validMask;
+
+  JsonObject sensorStatus = doc.createNestedObject("sensor_status");
+  sensorStatus["air_temp"] = (validMask & 0x01) != 0;
+  sensorStatus["humidity"] = (validMask & 0x02) != 0;
+  sensorStatus["water_temp"] = (validMask & 0x04) != 0;
+  sensorStatus["tds"] = (validMask & 0x08) != 0;
   
   JsonObject lora = doc.createNestedObject("lora_signal");
   lora["rssi"] = rssi;
@@ -196,7 +220,7 @@ void sendToMQTT(String sensorId, float temp, float hum, int rssi, float snr, int
   lora["rssi_max"] = loraStats.maxRSSI;
   lora["packet_count"] = loraStats.packetCount;
   
-  char jsonBuffer[256];
+  char jsonBuffer[384];
   serializeJson(doc, jsonBuffer);
   
   if (client.publish(mqtt_topic, jsonBuffer)) {
@@ -207,42 +231,82 @@ void sendToMQTT(String sensorId, float temp, float hum, int rssi, float snr, int
 }
 
 void parseAndSend(String data, int rssi, float snr) {
+  // Payload moi: ID:airTemp:hum:waterTemp:tds:validMask
+  // Van tuong thich payload cu: ID:airTemp:hum
   int firstColon = data.indexOf(':');
   int secondColon = data.indexOf(':', firstColon + 1);
-  
-  if (firstColon > 0 && secondColon > 0) {
-    lastSensorId = data.substring(0, firstColon);
-    String tempStr = data.substring(firstColon + 1, secondColon);
-    String humStr = data.substring(secondColon + 1);
-    
-    lastTemp = tempStr.toFloat();
-    lastHum = humStr.toFloat();
-    lastRssi = rssi;
-    lastSnr = snr;
-    hasData = true;
-    
-    loraStats.lastRSSI = rssi;
-    loraStats.lastSNR = snr;
-    loraStats.packetCount++;
-    loraStats.lastPacketTime = millis();
-    
-    if (rssi < loraStats.minRSSI) loraStats.minRSSI = rssi;
-    if (rssi > loraStats.maxRSSI) loraStats.maxRSSI = rssi;
-    
-    Serial.println("=========================");
-    Serial.println("Received: " + data);
-    Serial.printf("RSSI: %d dBm, SNR: %.2f dB\n", rssi, snr);
-    Serial.printf("Packet count: %d\n", loraStats.packetCount);
-    Serial.println("=========================");
-    
-    // Hiển thị lên LCD
-    updateLCDData();
-    
-    // Gửi MQTT
-    sendToMQTT(lastSensorId, lastTemp, lastHum, rssi, snr, loraStats.packetCount);
-  } else {
+  int thirdColon = data.indexOf(':', secondColon + 1);
+  int fourthColon = data.indexOf(':', thirdColon + 1);
+  int fifthColon = data.indexOf(':', fourthColon + 1);
+
+  if (firstColon <= 0 || secondColon <= 0) {
     Serial.println("Invalid format: " + data);
+    return;
   }
+
+  lastSensorId = data.substring(0, firstColon);
+  String tempStr = data.substring(firstColon + 1, secondColon);
+  String humStr = (thirdColon > 0) ? data.substring(secondColon + 1, thirdColon) : data.substring(secondColon + 1);
+
+  String waterTempStr = "";
+  String tdsStr = "";
+  String validMaskStr = "";
+  if (thirdColon > 0 && fourthColon > 0) {
+    if (fifthColon > 0) {
+      waterTempStr = data.substring(thirdColon + 1, fourthColon);
+      tdsStr = data.substring(fourthColon + 1, fifthColon);
+      validMaskStr = data.substring(fifthColon + 1);
+    } else {
+      waterTempStr = data.substring(thirdColon + 1, fourthColon);
+      tdsStr = data.substring(fourthColon + 1);
+    }
+  }
+
+  lastTemp = tempStr.toFloat();
+  lastHum = humStr.toFloat();
+  lastWaterTemp = waterTempStr.length() > 0 ? waterTempStr.toFloat() : 0.0f;
+  lastTds = tdsStr.length() > 0 ? tdsStr.toFloat() : 0.0f;
+
+  if (validMaskStr.length() > 0) {
+    lastValidMask = (uint8_t)validMaskStr.toInt();
+  } else {
+    // Payload cu khong co mask.
+    lastValidMask = (thirdColon > 0 && fourthColon > 0) ? 0x0F : 0x03;
+  }
+  lastAirValid = (lastValidMask & 0x01) != 0;
+  lastHumValid = (lastValidMask & 0x02) != 0;
+  lastWaterValid = (lastValidMask & 0x04) != 0;
+  lastTdsValid = (lastValidMask & 0x08) != 0;
+  lastRssi = rssi;
+  lastSnr = snr;
+  hasData = true;
+  
+  loraStats.lastRSSI = rssi;
+  loraStats.lastSNR = snr;
+  loraStats.packetCount++;
+  loraStats.lastPacketTime = millis();
+  
+  if (rssi < loraStats.minRSSI) loraStats.minRSSI = rssi;
+  if (rssi > loraStats.maxRSSI) loraStats.maxRSSI = rssi;
+  
+  Serial.println("=========================");
+  Serial.println("Received: " + data);
+  Serial.printf("Parsed: ID=%s, Air=%.1fC(%d), Hum=%.1f%%(%d), Water=%.1fC(%d), TDS=%.1fppm(%d), mask=%u\n",
+                lastSensorId.c_str(),
+                lastTemp, lastAirValid,
+                lastHum, lastHumValid,
+                lastWaterTemp, lastWaterValid,
+                lastTds, lastTdsValid,
+                lastValidMask);
+  Serial.printf("RSSI: %d dBm, SNR: %.2f dB\n", rssi, snr);
+  Serial.printf("Packet count: %d\n", loraStats.packetCount);
+  Serial.println("=========================");
+  
+  // Hiển thị lên LCD
+  updateLCDData();
+  
+  // Gửi MQTT
+  sendToMQTT(lastSensorId, lastTemp, lastHum, lastWaterTemp, lastTds, lastValidMask, rssi, snr, loraStats.packetCount);
 }
 
 void checkPacketLoss() {

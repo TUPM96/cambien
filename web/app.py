@@ -40,9 +40,16 @@ CSV_FIELDNAMES = (
     "sensor_id",
     "temperature",
     "humidity",
+    "water_temperature",
+    "tds",
     "rssi",
     "snr",
     "packet_id",
+    "valid_mask",
+    "air_temp_valid",
+    "humidity_valid",
+    "water_temp_valid",
+    "tds_valid",
     "signal_quality",
     "rssi_min",
     "rssi_max",
@@ -104,9 +111,16 @@ def _append_history_csv(data: dict[str, Any], latest: dict[str, Any], sid: str) 
         "sensor_id": sid,
         "temperature": latest["temperature"],
         "humidity": latest["humidity"],
+        "water_temperature": latest["water_temperature"],
+        "tds": latest["tds"],
         "rssi": latest["rssi"],
         "snr": latest["snr"],
         "packet_id": latest.get("packet_id"),
+        "valid_mask": latest.get("valid_mask"),
+        "air_temp_valid": latest.get("air_temp_valid"),
+        "humidity_valid": latest.get("humidity_valid"),
+        "water_temp_valid": latest.get("water_temp_valid"),
+        "tds_valid": latest.get("tds_valid"),
         "signal_quality": latest.get("signal_quality") or "",
         "rssi_min": latest.get("rssi_min"),
         "rssi_max": latest.get("rssi_max"),
@@ -134,10 +148,26 @@ def _handle_payload(raw: str) -> None:
         return
     sid = str(data.get("sensor_id", "unknown"))
     lora = data.get("lora_signal") or {}
+    sensor_status = data.get("sensor_status") or {}
+    valid_mask = int(data.get("valid_mask", 0))
+    has_valid_info = bool(sensor_status) or ("valid_mask" in data)
+    default_valid = True
+    air_temp_valid = bool(sensor_status.get("air_temp", (valid_mask & 0x01) != 0 if has_valid_info else default_valid))
+    humidity_valid = bool(sensor_status.get("humidity", (valid_mask & 0x02) != 0 if has_valid_info else default_valid))
+    water_temp_valid = bool(sensor_status.get("water_temp", (valid_mask & 0x04) != 0 if has_valid_info else default_valid))
+    tds_valid = bool(sensor_status.get("tds", (valid_mask & 0x08) != 0 if has_valid_info else default_valid))
+
     point = {
         "t": _now_iso(),
         "temperature": float(data.get("temperature", 0)),
         "humidity": float(data.get("humidity", 0)),
+        "water_temperature": float(data.get("water_temperature", 0)),
+        "tds": float(data.get("tds", 0)),
+        "valid_mask": valid_mask,
+        "air_temp_valid": air_temp_valid,
+        "humidity_valid": humidity_valid,
+        "water_temp_valid": water_temp_valid,
+        "tds_valid": tds_valid,
         "rssi": int(lora.get("rssi", 0)),
         "snr": float(lora.get("snr", 0)),
         "packet_id": data.get("packet_id"),

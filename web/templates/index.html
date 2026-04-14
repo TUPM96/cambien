@@ -34,6 +34,14 @@
           <canvas id="chartHum"></canvas>
         </div>
         <div class="chart-box">
+          <h3>Nhiệt độ nước (°C)</h3>
+          <canvas id="chartWaterTemp"></canvas>
+        </div>
+        <div class="chart-box">
+          <h3>TDS (ppm)</h3>
+          <canvas id="chartTds"></canvas>
+        </div>
+        <div class="chart-box">
           <h3>So sánh RSSI (dBm) — cường độ tín hiệu</h3>
           <canvas id="chartRssiBar"></canvas>
         </div>
@@ -82,8 +90,10 @@
           <article class="sensor-card">
             <h3>${id}</h3>
             <dl>
-              <dt>Nhiệt độ</dt><dd>${L.temperature != null ? L.temperature.toFixed(1) + " °C" : "—"}</dd>
-              <dt>Độ ẩm</dt><dd>${L.humidity != null ? L.humidity.toFixed(1) + " %" : "—"}</dd>
+              <dt>Nhiệt độ</dt><dd>${L.air_temp_valid ? L.temperature.toFixed(1) + " °C" : "Mất dữ liệu"}</dd>
+              <dt>Độ ẩm</dt><dd>${L.humidity_valid ? L.humidity.toFixed(1) + " %" : "Mất dữ liệu"}</dd>
+              <dt>Nhiệt độ nước</dt><dd>${L.water_temp_valid ? L.water_temperature.toFixed(1) + " °C" : "Mất dữ liệu"}</dd>
+              <dt>TDS</dt><dd>${L.tds_valid ? L.tds.toFixed(0) + " ppm" : "Mất dữ liệu"}</dd>
               <dt>RSSI</dt><dd>${L.rssi != null ? L.rssi + " dBm" : "—"}</dd>
               <dt>SNR</dt><dd>${L.snr != null ? L.snr.toFixed(2) + " dB" : "—"}</dd>
               <dt>Chất lượng</dt><dd class="${qc}">${q || "—"}</dd>
@@ -92,7 +102,7 @@
       }).join("");
     }
 
-    let chartTemp, chartHum, chartRssiBar, chartRssiLine;
+    let chartTemp, chartHum, chartWaterTemp, chartTds, chartRssiBar, chartRssiLine;
 
     function ensureCharts() {
       const common = {
@@ -144,6 +154,20 @@
               y: { ...common.scales.y, title: { display: true, text: "dBm", color: "#8b9cb3" } }
             }
           }
+        });
+      }
+      if (!chartWaterTemp) {
+        chartWaterTemp = new Chart(document.getElementById("chartWaterTemp"), {
+          type: "line",
+          data: { datasets: [] },
+          options: { ...common, scales: { ...common.scales, y: { ...common.scales.y, title: { display: true, text: "°C", color: "#8b9cb3" } } } }
+        });
+      }
+      if (!chartTds) {
+        chartTds = new Chart(document.getElementById("chartTds"), {
+          type: "line",
+          data: { datasets: [] },
+          options: { ...common, scales: { ...common.scales, y: { ...common.scales.y, title: { display: true, text: "ppm", color: "#8b9cb3" } } } }
         });
       }
     }
@@ -237,7 +261,7 @@
         data: labelsMaster.map((t) => {
           const h = byId[id].hist;
           const pt = h.find((x) => x.t === t);
-          return pt ? pt.temperature : null;
+          return pt && pt.air_temp_valid ? pt.temperature : null;
         }),
         borderColor: byId[id].color,
         backgroundColor: byId[id].color + "33",
@@ -253,7 +277,7 @@
         data: labelsMaster.map((t) => {
           const h = byId[id].hist;
           const pt = h.find((x) => x.t === t);
-          return pt ? pt.humidity : null;
+          return pt && pt.humidity_valid ? pt.humidity : null;
         }),
         borderColor: byId[id].color,
         backgroundColor: byId[id].color + "33",
@@ -263,6 +287,38 @@
       chartHum.data.labels = labelsShort;
       chartHum.data.datasets = humDatasets;
       chartHum.update("none");
+
+      const waterTempDatasets = ids.map((id) => ({
+        label: id,
+        data: labelsMaster.map((t) => {
+          const h = byId[id].hist;
+          const pt = h.find((x) => x.t === t);
+          return pt && pt.water_temp_valid ? pt.water_temperature : null;
+        }),
+        borderColor: byId[id].color,
+        backgroundColor: byId[id].color + "33",
+        spanGaps: true,
+        tension: 0.2
+      }));
+      chartWaterTemp.data.labels = labelsShort;
+      chartWaterTemp.data.datasets = waterTempDatasets;
+      chartWaterTemp.update("none");
+
+      const tdsDatasets = ids.map((id) => ({
+        label: id,
+        data: labelsMaster.map((t) => {
+          const h = byId[id].hist;
+          const pt = h.find((x) => x.t === t);
+          return pt && pt.tds_valid ? pt.tds : null;
+        }),
+        borderColor: byId[id].color,
+        backgroundColor: byId[id].color + "33",
+        spanGaps: true,
+        tension: 0.2
+      }));
+      chartTds.data.labels = labelsShort;
+      chartTds.data.datasets = tdsDatasets;
+      chartTds.update("none");
 
       const barLabels = [];
       const barVals = [];
