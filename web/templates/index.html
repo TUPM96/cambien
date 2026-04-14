@@ -41,6 +41,12 @@
           <h3>RSSI theo thời gian</h3>
           <canvas id="chartRssiLine"></canvas>
         </div>
+        <div class="chart-box capture-box">
+          <h3>Capture quality theo node (kỳ vọng vs thực nhận)</h3>
+          <div id="capturePanel" class="capture-panel">
+            <p class="empty-hint">Chưa có dữ liệu capture.</p>
+          </div>
+        </div>
       </div>
     </main>
   </div>
@@ -148,6 +154,69 @@
       return d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     }
 
+    function formatDuration(totalSec) {
+      const sec = Math.max(0, Math.floor(totalSec || 0));
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = sec % 60;
+      if (h > 0) return `${h}h ${m}m ${s}s`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    }
+
+    function renderCapture(nodes, captureConfig) {
+      const el = document.getElementById("capturePanel");
+      const ids = Object.keys(nodes).sort();
+      if (!ids.length) {
+        el.innerHTML = '<p class="empty-hint">Chưa có dữ liệu capture.</p>';
+        return;
+      }
+      const defaultIntervalSec = Number(captureConfig?.expected_interval_sec || 13);
+      const perNode = captureConfig?.interval_by_node || {};
+      const rows = ids.map((id) => {
+        const cap = nodes[id]?.capture || {};
+        const firstSeen = cap.first_seen ? new Date(cap.first_seen) : null;
+        const lastSeen = cap.last_seen ? new Date(cap.last_seen) : null;
+        const durationSec = firstSeen && lastSeen
+          ? Math.max(0, (lastSeen.getTime() - firstSeen.getTime()) / 1000)
+          : 0;
+        const intervalSec = Number(perNode[id] || defaultIntervalSec);
+        const received = Number(cap.received_total || 0);
+        const expected = received > 0 ? Math.max(1, Math.floor(durationSec / intervalSec) + 1) : 0;
+        const lost = Math.max(expected - received, 0);
+        const lossPct = expected > 0 ? (lost * 100 / expected) : 0;
+        const okCls = lossPct <= 5 ? "loss-good" : (lossPct <= 20 ? "loss-warn" : "loss-bad");
+        return `
+          <tr>
+            <td>${id}</td>
+            <td>${intervalSec}s</td>
+            <td>${formatDuration(durationSec)}</td>
+            <td>${expected}</td>
+            <td>${received}</td>
+            <td class="${okCls}">${lost}</td>
+            <td class="${okCls}">${lossPct.toFixed(1)}%</td>
+          </tr>
+        `;
+      }).join("");
+      el.innerHTML = `
+        <table class="capture-table">
+          <thead>
+            <tr>
+              <th>Node</th>
+              <th>Chu kỳ kỳ vọng</th>
+              <th>Thời gian capture</th>
+              <th>Kỳ vọng (gói)</th>
+              <th>Thực nhận (gói)</th>
+              <th>Mất (gói)</th>
+              <th>Mất (%)</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <p class="capture-note">Mặc định: ${defaultIntervalSec}s/gói. Có thể override theo node bằng CAPTURE_INTERVAL_BY_NODE.</p>
+      `;
+    }
+
     function updateCharts(nodes) {
       ensureCharts();
       const ids = Object.keys(nodes).sort();
@@ -235,6 +304,7 @@
         document.getElementById("mqttTopic").textContent = "Topic: " + (j.topic || "");
         renderSidebar(j.nodes || {});
         updateCharts(j.nodes || {});
+        renderCapture(j.nodes || {}, j.capture_config || {});
         document.getElementById("statusBar").textContent =
           "Cập nhật: " + new Date().toLocaleTimeString("vi-VN");
       } catch (e) {

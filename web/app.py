@@ -31,6 +31,7 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_USER = os.getenv("MQTT_USER", "user1")
 MQTT_PASS = os.getenv("MQTT_PASS", "12345678")
 MQTT_TOPIC = os.getenv("MQTT_TOPIC", "sensor/lora/data")
+CAPTURE_EXPECTED_INTERVAL_SEC = float(os.getenv("CAPTURE_EXPECTED_INTERVAL_SEC", "13"))
 
 DATA_DIR = BASE_DIR / "data"
 CSV_LOG_ENABLED = os.getenv("CSV_LOG", "1").lower() not in ("0", "false", "no")
@@ -55,9 +56,35 @@ _csv_lock = threading.Lock()
 # sensor_id -> deque of points
 _history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=MAX_POINTS))
 _latest: dict[str, dict[str, Any]] = {}
+_capture_stats: dict[str, dict[str, Any]] = {}
 
 _mqtt_thread_started = False
 _mqtt_start_lock = threading.Lock()
+
+
+def _parse_node_intervals(raw: str) -> dict[str, float]:
+    """
+    Parse dạng: S1=10,S2=13
+    """
+    out: dict[str, float] = {}
+    for item in (raw or "").split(","):
+        part = item.strip()
+        if not part or "=" not in part:
+            continue
+        sid, val = part.split("=", 1)
+        sid = sid.strip()
+        if not sid:
+            continue
+        try:
+            sec = float(val.strip())
+            if sec > 0:
+                out[sid] = sec
+        except ValueError:
+            continue
+    return out
+
+
+CAPTURE_INTERVAL_BY_NODE = _parse_node_intervals(os.getenv("CAPTURE_INTERVAL_BY_NODE", ""))
 
 
 def _now_iso() -> str:
@@ -125,6 +152,16 @@ def _handle_payload(raw: str) -> None:
     with _lock:
         _history[sid].append(point)
         _latest[sid] = latest
+        stats = _capture_stats.get(sid)
+        if stats is None:
+            _capture_stats[sid] = {
+                "first_seen": point["t"],
+                "last_seen": point["t"],
+                "received_total": 1,
+            }
+        else:
+            stats["last_seen"] = point["t"]
+            stats["received_total"] = int(stats.get("received_total", 0)) + 1
     _append_history_csv(data, latest, sid)
 
 
@@ -209,11 +246,23 @@ def api_state():
             nodes[sid] = {
                 "latest": _latest.get(sid),
                 "history": list(dq),
+                "capture": dict(_capture_stats.get(sid, {})),
             }
         for sid, lat in _latest.items():
             if sid not in nodes:
-                nodes[sid] = {"latest": lat, "history": list(_history[sid])}
-    return {"nodes": nodes, "topic": MQTT_TOPIC}
+                nodes[sid] = {
+                    "latest": lat,
+                    "history": list(_history[sid]),
+                    "capture": dict(_capture_stats.get(sid, {})),
+                }
+    return {
+        "nodes": nodes,
+        "topic": MQTT_TOPIC,
+        "capture_config": {
+            "expected_interval_sec": CAPTURE_EXPECTED_INTERVAL_SEC,
+            "interval_by_node": CAPTURE_INTERVAL_BY_NODE,
+        },
+    }
 
 
 def _pick_listen_port(preferred: int, span: int = 40) -> int:

@@ -162,6 +162,56 @@ body {
   max-height: 220px;
 }
 
+.capture-box {
+  grid-column: 1 / -1;
+  min-height: auto;
+}
+
+.capture-panel {
+  overflow-x: auto;
+}
+
+.capture-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.capture-table th,
+.capture-table td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.6rem;
+  text-align: left;
+}
+
+.capture-table th {
+  color: var(--muted);
+  background: #121a27;
+  font-weight: 600;
+}
+
+.capture-table td {
+  background: #121a27;
+}
+
+.loss-good {
+  color: var(--good);
+}
+
+.loss-warn {
+  color: var(--warn);
+}
+
+.loss-bad {
+  color: #f87171;
+}
+
+.capture-note {
+  margin: 0.6rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .empty-hint {
   color: var(--muted);
   font-size: 0.9rem;
