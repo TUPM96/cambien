@@ -30,6 +30,11 @@ PubSubClient client(espClient);
 String receivedData = "";
 String lastMessage = "";
 
+// Trạng thái gửi MQTT (publish)
+bool lastMqttPublishOk = true;
+unsigned long lastMqttPublishTime = 0;
+const unsigned long MQTT_PUBLISH_FAIL_SHOW_MS = 10000; // hiển thị lỗi gửi trong 10s
+
 struct LoRaQuality {
   int lastRSSI = 0;
   float lastSNR = 0;
@@ -133,7 +138,10 @@ void updateLCDStatus() {
   
   // Dòng 2: Trạng thái LoRa
   lcd.setCursor(0, 1);
-  if (hasData) {
+  // Nếu publish MQTT vừa fail thì ưu tiên hiển thị SEND FAIL
+  if (client.connected() && !lastMqttPublishOk && (millis() - lastMqttPublishTime) < MQTT_PUBLISH_FAIL_SHOW_MS) {
+    lcd.print("SEND FAIL");
+  } else if (hasData) {
     lcd.printf("Pkt:%d R:%d", loraStats.packetCount, lastRssi);
   } else {
     lcd.print("Waiting LoRa...");
@@ -191,6 +199,8 @@ void sendToMQTT(String sensorId, float temp, float hum, float waterTemp, float t
   
   if (!client.connected()) {
     Serial.println("MQTT not connected, skip sending");
+    lastMqttPublishOk = false;
+    lastMqttPublishTime = millis();
     return;
   }
   
@@ -222,8 +232,14 @@ void sendToMQTT(String sensorId, float temp, float hum, float waterTemp, float t
   
   if (client.publish(mqtt_topic, jsonBuffer)) {
     Serial.println("MQTT sent: " + String(jsonBuffer));
+    lastMqttPublishOk = true;
+    lastMqttPublishTime = millis();
   } else {
     Serial.println("MQTT send failed");
+    lastMqttPublishOk = false;
+    lastMqttPublishTime = millis();
+    // Cập nhật nhanh LCD để người dùng thấy lỗi ngay cả khi đang ở màn hình data
+    updateLCDStatus();
   }
 }
 
