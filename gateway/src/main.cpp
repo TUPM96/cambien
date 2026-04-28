@@ -154,11 +154,8 @@ void updateLCDData() {
   
   // Dòng 2: TDS + RSSI
   lcd.setCursor(0, 1);
-  if (lastTdsValid) {
-    lcd.print("TDS:" + String(lastTds, 0));
-  } else {
-    lcd.print("TDS:ERR");
-  }
+  // Quy ước mới: node gửi 0 khi không đo được -> LCD vẫn hiển thị 0, không hiển thị ERR.
+  lcd.print("TDS:" + String(lastTds, 0));
   
   lcd.setCursor(12, 1);
   lcd.printf("R:%d", lastRssi);
