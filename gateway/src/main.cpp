@@ -198,7 +198,7 @@ void sendToMQTT(String sensorId, float temp, float hum, float waterTemp, float t
   }
   
   if (!client.connected()) {
-    Serial.println("MQTT not connected, skip sending");
+    Serial.printf("MQTT not connected, skip sending (state=%d)\n", client.state());
     lastMqttPublishOk = false;
     lastMqttPublishTime = millis();
     return;
@@ -231,11 +231,19 @@ void sendToMQTT(String sensorId, float temp, float hum, float waterTemp, float t
   serializeJson(doc, jsonBuffer);
   
   if (client.publish(mqtt_topic, jsonBuffer)) {
-    Serial.println("MQTT sent: " + String(jsonBuffer));
+    Serial.printf("MQTT publish OK topic=%s bytes=%u packet_id=%d sensor=%s\n",
+                  mqtt_topic,
+                  (unsigned)strlen(jsonBuffer),
+                  packetId,
+                  sensorId.c_str());
     lastMqttPublishOk = true;
     lastMqttPublishTime = millis();
   } else {
-    Serial.println("MQTT send failed");
+    Serial.printf("MQTT publish FAIL topic=%s (state=%d) packet_id=%d sensor=%s\n",
+                  mqtt_topic,
+                  client.state(),
+                  packetId,
+                  sensorId.c_str());
     lastMqttPublishOk = false;
     lastMqttPublishTime = millis();
     // Cập nhật nhanh LCD để người dùng thấy lỗi ngay cả khi đang ở màn hình data
