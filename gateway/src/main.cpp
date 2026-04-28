@@ -270,8 +270,16 @@ void parseAndSend(String data, int rssi, float snr) {
   if (validMaskStr.length() > 0) {
     lastValidMask = (uint8_t)validMaskStr.toInt();
   } else {
-    // Payload cu khong co mask.
-    lastValidMask = (thirdColon > 0 && fourthColon > 0) ? 0x0F : 0x03;
+    // Fallback khi payload không có mask:
+    // - Payload cũ (ID:temp:hum) hoặc payload thiếu field -> chỉ set bit cho field có giá trị != 0
+    // Quy ước: 0 = mất dữ liệu
+    lastValidMask = 0;
+    if (lastTemp != 0.0f) lastValidMask |= 0x01;
+    if (lastHum != 0.0f) lastValidMask |= 0x02;
+    if (thirdColon > 0 && fourthColon > 0) {
+      if (lastWaterTemp != 0.0f) lastValidMask |= 0x04;
+      if (lastTds != 0.0f) lastValidMask |= 0x08;
+    }
   }
   lastAirValid = (lastValidMask & 0x01) != 0;
   lastHumValid = (lastValidMask & 0x02) != 0;

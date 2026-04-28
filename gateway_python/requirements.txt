@@ -1,0 +1,10 @@
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+paho-mqtt>=2.0.0
+jinja2>=3.1.0
+python-dotenv>=1.0.0
+
+# Raspberry Pi LoRa (SX127x/RFM9x) via SPI
+adafruit-blinka>=8.0.0
+adafruit-circuitpython-rfm9x>=2.2.0
+digitalio>=1.0.0

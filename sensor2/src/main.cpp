@@ -33,6 +33,9 @@ const int ADC_RESOLUTION = 4095;
 const char* SENSOR_ID = "S2";
 const unsigned long SEND_INTERVAL_MS = 13000; // Sensor 2: 13 giay
 
+// 1 = gửi kèm validMask; 0 = không gửi validMask (gateway sẽ fallback "0 = mất dữ liệu")
+#define SEND_VALID_MASK 0
+
 float readWaterTemperatureC() {
   waterSensor.requestTemperatures();
   float t = waterSensor.getTempCByIndex(0);
@@ -121,9 +124,16 @@ void loop() {
   if (waterValid) validMask |= 0x04;
   if (tdsValid) validMask |= 0x08;
 
+  String message;
+#if SEND_VALID_MASK
   // Dinh dang moi: ID:airTemp:hum:waterTemp:tds:validMask
-  String message = String(SENSOR_ID) + ":" + String(temp, 1) + ":" + String(hum, 1) +
-                   ":" + String(waterTemp, 1) + ":" + String(tds, 1) + ":" + String((int)validMask);
+  message = String(SENSOR_ID) + ":" + String(temp, 1) + ":" + String(hum, 1) +
+            ":" + String(waterTemp, 1) + ":" + String(tds, 1) + ":" + String((int)validMask);
+#else
+  // Dinh dang fallback: ID:airTemp:hum:waterTemp:tds  (0 = mất dữ liệu)
+  message = String(SENSOR_ID) + ":" + String(temp, 1) + ":" + String(hum, 1) +
+            ":" + String(waterTemp, 1) + ":" + String(tds, 1);
+#endif
 
   // Gửi LoRa
   LoRa.beginPacket();
