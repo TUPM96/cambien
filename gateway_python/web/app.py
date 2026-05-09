@@ -139,7 +139,7 @@ def _append_history_csv(data: dict[str, Any], latest: dict[str, Any], sid: str) 
                     w.writeheader()
                 w.writerow(row)
     except OSError as e:
-        print(f"CSV log lỗi: {e}")
+        print(f"CSV log loi: {e}")
 
 
 def _handle_payload(raw: str) -> None:
@@ -209,7 +209,7 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
         return
     client.subscribe(MQTT_TOPIC, qos=0)
     cid = userdata if isinstance(userdata, str) else "?"
-    print(f"MQTT đã kết nối, đăng ký 1 topic: {MQTT_TOPIC} (client_id={cid})")
+    print(f"MQTT da ket noi, dang ky 1 topic: {MQTT_TOPIC} (client_id={cid})")
 
 
 def on_message(client, userdata, msg):
@@ -308,7 +308,7 @@ def _pick_listen_port(preferred: int, span: int = 40) -> int:
                 last_err = e
                 continue
             return port
-    msg = f"Không có cổng trống trong [{preferred}, {preferred + span - 1}]"
+    msg = f"Khong co cong trong trong [{preferred}, {preferred + span - 1}]"
     if last_err:
         msg += f": {last_err}"
     raise OSError(msg)
@@ -320,7 +320,7 @@ if __name__ == "__main__":
     want = int(os.getenv("WEB_PORT", "8000"))
     port = _pick_listen_port(want)
     if port != want:
-        print(f"Cổng {want} đang bận → dùng cổng {port}")
-    print(f"Mở trình duyệt: http://127.0.0.1:{port}")
+        print(f"Cong {want} dang ban -> dung cong {port}")
+    print(f"Mo trinh duyet: http://127.0.0.1:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
 

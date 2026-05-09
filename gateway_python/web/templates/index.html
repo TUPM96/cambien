@@ -70,11 +70,11 @@
     function qualityClass(q) {
       if (!q) return "";
       const s = String(q).toLowerCase();
-      if (s.includes("rất tốt") || s.includes("excellent")) return "quality-excellent";
-      if (s === "tốt" || s.includes("good")) return "quality-good";
-      if (s.includes("trung bình") || s.includes("fair")) return "quality-fair";
-      if (s === "yếu" || s.includes("poor")) return "quality-poor";
-      if (s.includes("rất yếu") || s.includes("weak")) return "quality-very";
+      if (s.includes("rất tốt") || s.includes("rat tot") || s.includes("excellent")) return "quality-excellent";
+      if (s === "tốt" || s === "tot" || s.includes("good")) return "quality-good";
+      if (s.includes("trung bình") || s.includes("trung binh") || s.includes("fair")) return "quality-fair";
+      if (s === "yếu" || s === "yeu" || s.includes("poor")) return "quality-poor";
+      if (s.includes("rất yếu") || s.includes("rat yeu") || s.includes("weak")) return "quality-very";
       return "";
     }
 
