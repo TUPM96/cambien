@@ -447,14 +447,14 @@ class LoRaMQTTGateway:
     def _signal_quality(self, rssi: int, snr: float) -> str:
         # Simple heuristic for UI; web can display this string.
         if rssi >= -70 and snr >= 7:
-            return "excellent"
+            return "Rất tốt"
         if rssi >= -85 and snr >= 5:
-            return "good"
+            return "Tốt"
         if rssi >= -100 and snr >= 2:
-            return "fair"
+            return "Trung bình"
         if rssi >= -115:
-            return "poor"
-        return "very weak"
+            return "Yếu"
+        return "Rất yếu"
 
     def _run(self) -> None:
         if not self._mqtt_connect():
