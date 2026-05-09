@@ -27,8 +27,13 @@ DallasTemperature waterSensor(&oneWire);
 
 // TDS analog
 #define TDS_PIN 34
+
+// pH analog
+#define PH_PIN 35
 const float ADC_VREF = 3.3f;
 const int ADC_RESOLUTION = 4095;
+const float PH_NEUTRAL_VOLTAGE = 2.50f; // Voltage at pH 7.00, calibrate with buffer solution.
+const float PH_VOLTAGE_PER_PH = 0.18f;  // Typical pH probe module slope near 25C.
 
 const char* SENSOR_ID = "S1";
 const unsigned long SEND_INTERVAL_MS = 10000; // Sensor 1: 10 giay
@@ -92,6 +97,26 @@ float readTdsPpm(float waterTempC, bool* isValid) {
   return tds;
 }
 
+float readPhValue(bool* isValid) {
+  const int samples = 30;
+  uint32_t adcSum = 0;
+  for (int i = 0; i < samples; i++) {
+    adcSum += analogRead(PH_PIN);
+    delay(10);
+  }
+
+  float adcAvg = (float)adcSum / samples;
+  float voltage = adcAvg * ADC_VREF / ADC_RESOLUTION;
+  if (isValid != nullptr) {
+    *isValid = voltage >= 0.05f && voltage <= (ADC_VREF - 0.05f);
+  }
+
+  float ph = 7.0f + ((PH_NEUTRAL_VOLTAGE - voltage) / PH_VOLTAGE_PER_PH);
+  if (ph < 0.0f) ph = 0.0f;
+  if (ph > 14.0f) ph = 14.0f;
+  return ph;
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -107,6 +132,7 @@ void setup() {
   waterSensor.begin();
   analogReadResolution(12);
   pinMode(TDS_PIN, INPUT);
+  pinMode(PH_PIN, INPUT);
 
   // LoRa init
   LoRa.setPins(SS, RST, DIO0);
@@ -129,6 +155,8 @@ void loop() {
   float waterTempRaw = readWaterTemperatureC();
   bool tdsValid = false;
   float tdsRaw = readTdsPpm(waterTempRaw, &tdsValid);
+  bool phValid = false;
+  float phRaw = readPhValue(&phValid);
 
   bool airValid = !isnan(airTempRaw);
   bool humValid = !isnan(humRaw);
@@ -139,22 +167,25 @@ void loop() {
   float hum = humValid ? humRaw : 0.0f;
   float waterTemp = waterValid ? waterTempRaw : 0.0f;
   float tds = tdsValid ? tdsRaw : 0.0f;
+  float ph = phValid ? phRaw : 0.0f;
 
   uint8_t validMask = 0;
   if (airValid) validMask |= 0x01;
   if (humValid) validMask |= 0x02;
   if (waterValid) validMask |= 0x04;
   if (tdsValid) validMask |= 0x08;
+  if (phValid) validMask |= 0x10;
 
   String message;
 #if SEND_VALID_MASK
-  // Dinh dang moi: ID:airTemp:hum:waterTemp:tds:validMask
+  // Dinh dang moi: ID:airTemp:hum:waterTemp:tds:ph:validMask
   message = String(SENSOR_ID) + ":" + String(temp, 1) + ":" + String(hum, 1) +
-            ":" + String(waterTemp, 1) + ":" + String(tds, 1) + ":" + String((int)validMask);
+            ":" + String(waterTemp, 1) + ":" + String(tds, 1) +
+            ":" + String(ph, 2) + ":" + String((int)validMask);
 #else
-  // Dinh dang fallback: ID:airTemp:hum:waterTemp:tds  (0 = mất dữ liệu)
+  // Dinh dang fallback: ID:airTemp:hum:waterTemp:tds:ph  (0 = mất dữ liệu)
   message = String(SENSOR_ID) + ":" + String(temp, 1) + ":" + String(hum, 1) +
-            ":" + String(waterTemp, 1) + ":" + String(tds, 1);
+            ":" + String(waterTemp, 1) + ":" + String(tds, 1) + ":" + String(ph, 2);
 #endif
 
   // Gửi LoRa
@@ -169,7 +200,7 @@ void loop() {
   lcd.setCursor(0,0);
   lcd.print(String(SENSOR_ID) + " A:" + String(temp,1));
   lcd.setCursor(0,1);
-  lcd.print("W:" + String(waterTemp,1) + " T:" + String(tds,0));
+  lcd.print("pH:" + String(ph,2) + " T:" + String(tds,0));
 
   unsigned long elapsed = millis() - loopStart;
   if (elapsed < SEND_INTERVAL_MS) {

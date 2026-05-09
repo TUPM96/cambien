@@ -2,7 +2,7 @@
 
 Thư mục này thay thế `gateway/` (ESP32) bằng gateway chạy trên **Raspberry Pi 4**:
 
-- **Nhận LoRa (433MHz)** từ node (payload giống ESP32: `ID:temp:hum:waterTemp:tds:validMask`)
+- **Nhận LoRa (433MHz)** từ node (payload: `ID:temp:hum:waterTemp:tds:ph:validMask`)
 - **Publish MQTT** đúng schema JSON như ESP32 (`sensor/lora/data`)
 - **Chạy web dashboard** (FastAPI) để xem dữ liệu và lưu CSV
 
@@ -37,15 +37,17 @@ cp .env.example .env
     - `LORA_RESET_BCM` (GPIO reset của module LoRa)
     - Tham số phải khớp node ESP32: `LORA_SPREADING_FACTOR=7`, `LORA_SIGNAL_BANDWIDTH=125000`, `LORA_CODING_RATE=5`, `LORA_PREAMBLE_LENGTH=8`, `LORA_SYNC_WORD=0x12`, `LORA_CRC=0`
   - **Fallback “0 = mất dữ liệu”** (khi node *không gửi* `validMask`):
-    - `FALLBACK_ZERO_INVALID_FIELDS=temperature,humidity,water_temperature,tds`
+    - `FALLBACK_ZERO_INVALID_FIELDS=temperature,humidity,water_temperature,tds,ph`
   - **Web**: `WEB_PORT`
 
 Node con hiện gửi raw LoRa string bằng `LoRa.print(message)`, không có RadioHead header:
 
 ```text
-S1:airTemp:hum:waterTemp:tds:validMask
-S2:airTemp:hum:waterTemp:tds:validMask
+S1:airTemp:hum:waterTemp:tds:ph:validMask
+S2:airTemp:hum:waterTemp:tds:ph:validMask
 ```
+
+`validMask` dùng bit `0x10` cho pH.
 
 ### 3) Chạy cả gateway + web
 

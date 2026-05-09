@@ -261,7 +261,8 @@ def _decode_lora_packet(packet: bytes | bytearray) -> str:
 def _parse_payload(payload: str, zero_invalid_fields: set[str]) -> Optional[dict]:
     """
     ESP32 format:
-      - new: ID:airTemp:hum:waterTemp:tds:validMask
+      - new: ID:airTemp:hum:waterTemp:tds:ph:validMask
+      - previous: ID:airTemp:hum:waterTemp:tds:validMask
       - old: ID:airTemp:hum
     """
     parts = payload.strip().split(":")
@@ -283,11 +284,17 @@ def _parse_payload(payload: str, zero_invalid_fields: set[str]) -> Optional[dict
 
     water_temp = _to_float(parts[3]) if len(parts) >= 4 and parts[3] != "" else 0.0
     tds = _to_float(parts[4]) if len(parts) >= 5 and parts[4] != "" else 0.0
+    ph = 0.0
+
+    mask_index = 5
+    if len(parts) >= 7:
+        ph = _to_float(parts[5]) if parts[5] != "" else 0.0
+        mask_index = 6
 
     explicit_mask = False
-    if len(parts) >= 6 and parts[5] != "":
+    if len(parts) > mask_index and parts[mask_index] != "":
         try:
-            valid_mask = int(float(parts[5]))
+            valid_mask = int(float(parts[mask_index]))
             explicit_mask = True
         except ValueError:
             valid_mask = 0
@@ -310,6 +317,11 @@ def _parse_payload(payload: str, zero_invalid_fields: set[str]) -> Optional[dict
                 pass
             else:
                 valid_mask |= 0x08
+        if len(parts) >= 6:
+            if ("ph" in zero_invalid_fields) and ph == 0.0:
+                pass
+            else:
+                valid_mask |= 0x10
 
     return {
         "sensor_id": sensor_id,
@@ -317,6 +329,7 @@ def _parse_payload(payload: str, zero_invalid_fields: set[str]) -> Optional[dict
         "humidity": hum,
         "water_temperature": water_temp,
         "tds": tds,
+        "ph": ph,
         "valid_mask": valid_mask & 0xFF,
         "explicit_mask": explicit_mask,
     }
@@ -362,8 +375,8 @@ class LoRaMQTTGateway:
 
         self.print_packets = _env_bool("LORA_PRINT_PACKETS", True)
         # Nếu node không gửi validMask, coi giá trị 0 của các field này là "mất dữ liệu".
-        # Ví dụ: "water_temperature,tds"
-        self.zero_invalid_fields = _parse_csv_set(os.getenv("FALLBACK_ZERO_INVALID_FIELDS", "water_temperature,tds"))
+        # Ví dụ: "water_temperature,tds,ph"
+        self.zero_invalid_fields = _parse_csv_set(os.getenv("FALLBACK_ZERO_INVALID_FIELDS", "water_temperature,tds,ph"))
 
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -493,6 +506,7 @@ class LoRaMQTTGateway:
                     "humidity": parsed["humidity"],
                     "water_temperature": parsed["water_temperature"],
                     "tds": parsed["tds"],
+                    "ph": parsed["ph"],
                     "timestamp": now_ms,  # giống ESP32 (millis), nhưng ở Pi dùng monotonic ms
                     "packet_id": self.stats.packet_count,
                     "valid_mask": valid_mask,
@@ -501,6 +515,7 @@ class LoRaMQTTGateway:
                         "humidity": (valid_mask & 0x02) != 0,
                         "water_temp": (valid_mask & 0x04) != 0,
                         "tds": (valid_mask & 0x08) != 0,
+                        "ph": (valid_mask & 0x10) != 0,
                     },
                     "lora_signal": {
                         "rssi": rssi,

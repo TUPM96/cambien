@@ -42,6 +42,10 @@
           <canvas id="chartTds"></canvas>
         </div>
         <div class="chart-box">
+          <h3>pH</h3>
+          <canvas id="chartPh"></canvas>
+        </div>
+        <div class="chart-box">
           <h3>So sánh RSSI (dBm) — cường độ tín hiệu</h3>
           <canvas id="chartRssiBar"></canvas>
         </div>
@@ -94,6 +98,7 @@
               <dt>Độ ẩm</dt><dd>${L.humidity_valid ? L.humidity.toFixed(1) + " %" : "Mất dữ liệu"}</dd>
               <dt>Nhiệt độ nước</dt><dd>${L.water_temp_valid ? L.water_temperature.toFixed(1) + " °C" : "Mất dữ liệu"}</dd>
               <dt>TDS</dt><dd>${L.tds_valid ? L.tds.toFixed(0) + " ppm" : "Mất dữ liệu"}</dd>
+              <dt>pH</dt><dd>${L.ph_valid ? L.ph.toFixed(2) : "Mất dữ liệu"}</dd>
               <dt>RSSI</dt><dd>${L.rssi != null ? L.rssi + " dBm" : "—"}</dd>
               <dt>SNR</dt><dd>${L.snr != null ? L.snr.toFixed(2) + " dB" : "—"}</dd>
               <dt>Chất lượng</dt><dd class="${qc}">${q || "—"}</dd>
@@ -102,7 +107,7 @@
       }).join("");
     }
 
-    let chartTemp, chartHum, chartWaterTemp, chartTds, chartRssiBar, chartRssiLine;
+    let chartTemp, chartHum, chartWaterTemp, chartTds, chartPh, chartRssiBar, chartRssiLine;
 
     function ensureCharts() {
       const common = {
@@ -168,6 +173,13 @@
           type: "line",
           data: { datasets: [] },
           options: { ...common, scales: { ...common.scales, y: { ...common.scales.y, title: { display: true, text: "ppm", color: "#8b9cb3" } } } }
+        });
+      }
+      if (!chartPh) {
+        chartPh = new Chart(document.getElementById("chartPh"), {
+          type: "line",
+          data: { datasets: [] },
+          options: { ...common, scales: { ...common.scales, y: { ...common.scales.y, min: 0, max: 14, title: { display: true, text: "pH", color: "#8b9cb3" } } } }
         });
       }
     }
@@ -319,6 +331,22 @@
       chartTds.data.labels = labelsShort;
       chartTds.data.datasets = tdsDatasets;
       chartTds.update("none");
+
+      const phDatasets = ids.map((id) => ({
+        label: id,
+        data: labelsMaster.map((t) => {
+          const h = byId[id].hist;
+          const pt = h.find((x) => x.t === t);
+          return pt && pt.ph_valid ? pt.ph : null;
+        }),
+        borderColor: byId[id].color,
+        backgroundColor: byId[id].color + "33",
+        spanGaps: true,
+        tension: 0.2
+      }));
+      chartPh.data.labels = labelsShort;
+      chartPh.data.datasets = phDatasets;
+      chartPh.update("none");
 
       const barLabels = [];
       const barVals = [];
