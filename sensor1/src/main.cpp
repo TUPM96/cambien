@@ -33,8 +33,29 @@ const int ADC_RESOLUTION = 4095;
 const char* SENSOR_ID = "S1";
 const unsigned long SEND_INTERVAL_MS = 10000; // Sensor 1: 10 giay
 
-// 1 = gửi kèm validMask; 0 = không gửi validMask (gateway sẽ fallback "0 = mất dữ liệu")
-#define SEND_VALID_MASK 0
+const long LORA_FREQUENCY_HZ = 433000000L;
+const int LORA_SPREADING_FACTOR = 7;
+const long LORA_SIGNAL_BANDWIDTH = 125000L;
+const int LORA_CODING_RATE_DENOMINATOR = 5; // CR 4/5
+const int LORA_PREAMBLE_LENGTH = 8;
+const int LORA_SYNC_WORD = 0x12;
+const bool LORA_CRC_ENABLED = false;
+
+// 1 = gửi kèm validMask để gateway phân biệt giá trị 0 thật và 0 do lỗi cảm biến.
+#define SEND_VALID_MASK 1
+
+void configureLoRaRadio() {
+  LoRa.setSpreadingFactor(LORA_SPREADING_FACTOR);
+  LoRa.setSignalBandwidth(LORA_SIGNAL_BANDWIDTH);
+  LoRa.setCodingRate4(LORA_CODING_RATE_DENOMINATOR);
+  LoRa.setPreambleLength(LORA_PREAMBLE_LENGTH);
+  LoRa.setSyncWord(LORA_SYNC_WORD);
+  if (LORA_CRC_ENABLED) {
+    LoRa.enableCrc();
+  } else {
+    LoRa.disableCrc();
+  }
+}
 
 float readWaterTemperatureC() {
   waterSensor.requestTemperatures();
@@ -89,12 +110,13 @@ void setup() {
 
   // LoRa init
   LoRa.setPins(SS, RST, DIO0);
-  if (!LoRa.begin(433E6)) {
+  if (!LoRa.begin(LORA_FREQUENCY_HZ)) {
     Serial.println("LoRa FAIL");
     lcd.clear();
     lcd.print("LoRa FAIL");
     while (1);
   }
+  configureLoRaRadio();
 
   delay(2000);
   lcd.clear();

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -7,6 +8,10 @@ from typing import Optional, Tuple
 
 import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
+
+_REG_MODEM_CONFIG1 = 0x1D
+_REG_SYNC_WORD = 0x39
+_SENSOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -16,12 +21,49 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() not in ("0", "false", "no", "off", "")
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return int(raw.strip(), 0)
+
+
 def _monotonic_ms() -> int:
     return int(time.monotonic() * 1000)
 
 
 def _parse_csv_set(raw: str) -> set[str]:
     return {p.strip().lower() for p in (raw or "").split(",") if p.strip()}
+
+
+def _looks_like_sensor_payload(text: str) -> bool:
+    parts = text.strip().split(":")
+    sensor_id = parts[0].strip() if parts else ""
+    if len(parts) < 3 or not _SENSOR_ID_RE.fullmatch(sensor_id):
+        return False
+    try:
+        float(parts[1])
+        float(parts[2])
+    except ValueError:
+        return False
+    return True
+
+
+def _decode_lora_packet(packet: bytes | bytearray) -> str:
+    raw = bytes(packet)
+    candidates = [raw]
+    if len(raw) > 4:
+        # Adafruit RFM9x is RadioHead-oriented. When reading with_header=True,
+        # raw ESP32 LoRa.print() packets are returned intact; RadioHead packets
+        # have a 4-byte header before the text payload.
+        candidates.append(raw[4:])
+
+    for candidate in candidates:
+        text = candidate.decode("utf-8", errors="replace").strip(" \t\r\n\x00")
+        if _looks_like_sensor_payload(text):
+            return text
+
+    return raw.decode("utf-8", errors="replace").strip(" \t\r\n\x00")
 
 
 def _parse_payload(payload: str, zero_invalid_fields: set[str]) -> Optional[dict]:
@@ -114,6 +156,17 @@ class LoRaMQTTGateway:
         self.lora_reset_bcm = int(os.getenv("LORA_RESET_BCM", "22"))
         self.lora_rx_timeout_sec = float(os.getenv("LORA_RX_TIMEOUT_SEC", "0.2"))
         self.lora_lost_signal_sec = float(os.getenv("LORA_LOST_SIGNAL_SEC", "60"))
+        self.lora_spi_baudrate = int(float(os.getenv("LORA_SPI_BAUDRATE", "1000000")))
+
+        # Match sandeepmistry/LoRa defaults used by sensor1/sensor2:
+        # LoRa.begin(433E6) + explicit header + SF7/BW125/CR4/5/preamble 8/sync 0x12/no CRC.
+        self.lora_spreading_factor = int(os.getenv("LORA_SPREADING_FACTOR", "7"))
+        self.lora_signal_bandwidth = int(float(os.getenv("LORA_SIGNAL_BANDWIDTH", "125000")))
+        self.lora_coding_rate = int(os.getenv("LORA_CODING_RATE", "5"))
+        self.lora_preamble_length = int(os.getenv("LORA_PREAMBLE_LENGTH", "8"))
+        self.lora_sync_word = _env_int("LORA_SYNC_WORD", 0x12) & 0xFF
+        self.lora_crc = _env_bool("LORA_CRC", False)
+        self.lora_agc = _env_bool("LORA_AGC", True)
 
         self.print_packets = _env_bool("LORA_PRINT_PACKETS", True)
         # Nếu node không gửi validMask, coi giá trị 0 của các field này là "mất dữ liệu".
@@ -159,6 +212,33 @@ class LoRaMQTTGateway:
         payload = json.dumps(message, ensure_ascii=False)
         self._mqtt.publish(self.mqtt_topic, payload, qos=0, retain=False)
 
+    def _write_reg(self, rfm9x, address: int, value: int) -> None:
+        writer = getattr(rfm9x, "_write_u8", None)
+        if not callable(writer):
+            raise RuntimeError("adafruit_rfm9x missing _write_u8; cannot set raw LoRa register")
+        writer(address, value & 0xFF)
+
+    def _read_reg(self, rfm9x, address: int) -> int:
+        reader = getattr(rfm9x, "_read_u8", None)
+        if not callable(reader):
+            raise RuntimeError("adafruit_rfm9x missing _read_u8; cannot verify raw LoRa register")
+        return int(reader(address)) & 0xFF
+
+    def _configure_lora(self, rfm9x) -> None:
+        rfm9x.signal_bandwidth = self.lora_signal_bandwidth
+        rfm9x.coding_rate = self.lora_coding_rate
+        rfm9x.spreading_factor = self.lora_spreading_factor
+        rfm9x.preamble_length = self.lora_preamble_length
+        rfm9x.enable_crc = self.lora_crc
+        if hasattr(rfm9x, "auto_agc"):
+            rfm9x.auto_agc = self.lora_agc
+
+        self._write_reg(rfm9x, _REG_SYNC_WORD, self.lora_sync_word)
+
+        # Arduino LoRa.beginPacket(false)/parsePacket() use explicit header mode.
+        modem_config1 = self._read_reg(rfm9x, _REG_MODEM_CONFIG1)
+        self._write_reg(rfm9x, _REG_MODEM_CONFIG1, modem_config1 & 0xFE)
+
     def _init_lora(self):
         # Import lazily so dev machines without GPIO libs can still import this module.
         import board  # type: ignore
@@ -180,20 +260,27 @@ class LoRaMQTTGateway:
             reset_pin = getattr(board, f"GPIO{self.lora_reset_bcm}")
         reset = digitalio.DigitalInOut(reset_pin)
 
-        rfm9x = adafruit_rfm9x.RFM9x(spi, cs, reset, self.lora_frequency_mhz)
+        rfm9x = adafruit_rfm9x.RFM9x(
+            spi,
+            cs,
+            reset,
+            self.lora_frequency_mhz,
+            preamble_length=self.lora_preamble_length,
+            baudrate=self.lora_spi_baudrate,
+            agc=self.lora_agc,
+            crc=self.lora_crc,
+        )
+        self._configure_lora(rfm9x)
         return rfm9x
 
     def _read_packet(self, rfm9x) -> Tuple[Optional[str], int, float]:
-        pkt = rfm9x.receive(timeout=self.lora_rx_timeout_sec)
+        pkt = rfm9x.receive(timeout=self.lora_rx_timeout_sec, with_header=True)
         if pkt is None:
             return None, 0, 0.0
-        try:
-            text = pkt.decode("utf-8", errors="replace").strip()
-        except Exception:
-            text = str(pkt)
+        text = _decode_lora_packet(pkt)
 
-        rssi = int(getattr(rfm9x, "rssi", 0) or 0)
-        snr = float(getattr(rfm9x, "snr", getattr(rfm9x, "last_snr", 0.0)) or 0.0)
+        rssi = int(getattr(rfm9x, "last_rssi", getattr(rfm9x, "rssi", 0)) or 0)
+        snr = float(getattr(rfm9x, "last_snr", getattr(rfm9x, "snr", 0.0)) or 0.0)
         return text, rssi, snr
 
     def _signal_quality(self, rssi: int, snr: float) -> str:
@@ -221,7 +308,13 @@ class LoRaMQTTGateway:
             return
 
         self.stats.last_packet_ms = _monotonic_ms()
-        print(f"LoRa gateway ready on Pi (freq={self.lora_frequency_mhz}MHz, CS={self.lora_spi_cs})")
+        print(
+            "LoRa gateway ready on Pi "
+            f"(freq={self.lora_frequency_mhz}MHz, CS={self.lora_spi_cs}, "
+            f"SF{self.lora_spreading_factor}, BW={self.lora_signal_bandwidth}Hz, "
+            f"CR=4/{self.lora_coding_rate}, preamble={self.lora_preamble_length}, "
+            f"sync=0x{self.lora_sync_word:02X}, crc={'on' if self.lora_crc else 'off'})"
+        )
 
         while not self._stop.is_set():
             msg, rssi, snr = self._read_packet(rfm9x)

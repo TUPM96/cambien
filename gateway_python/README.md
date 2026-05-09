@@ -35,9 +35,17 @@ cp .env.example .env
     - `LORA_FREQUENCY_MHZ` (mặc định `433.0`)
     - `LORA_SPI_CS` = `CE0` hoặc `CE1`
     - `LORA_RESET_BCM` (GPIO reset của module LoRa)
+    - Tham số phải khớp node ESP32: `LORA_SPREADING_FACTOR=7`, `LORA_SIGNAL_BANDWIDTH=125000`, `LORA_CODING_RATE=5`, `LORA_PREAMBLE_LENGTH=8`, `LORA_SYNC_WORD=0x12`, `LORA_CRC=0`
   - **Fallback “0 = mất dữ liệu”** (khi node *không gửi* `validMask`):
-    - `FALLBACK_ZERO_INVALID_FIELDS=water_temperature,tds`
+    - `FALLBACK_ZERO_INVALID_FIELDS=temperature,humidity,water_temperature,tds`
   - **Web**: `WEB_PORT`
+
+Node con hiện gửi raw LoRa string bằng `LoRa.print(message)`, không có RadioHead header:
+
+```text
+S1:airTemp:hum:waterTemp:tds:validMask
+S2:airTemp:hum:waterTemp:tds:validMask
+```
 
 ### 3) Chạy cả gateway + web
 
