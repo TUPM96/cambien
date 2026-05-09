@@ -7,4 +7,3 @@ python-dotenv>=1.0.0
 # Raspberry Pi LoRa (SX127x/RFM9x) via SPI
 adafruit-blinka>=8.0.0
 adafruit-circuitpython-rfm9x>=2.2.0
-digitalio>=1.0.0
