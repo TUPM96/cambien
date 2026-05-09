@@ -10,8 +10,200 @@ import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
 
 _REG_MODEM_CONFIG1 = 0x1D
+_REG_MODEM_CONFIG2 = 0x1E
+_REG_MODEM_CONFIG3 = 0x26
 _REG_SYNC_WORD = 0x39
 _SENSOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+class SX127xSpidev:
+    REG_FIFO = 0x00
+    REG_OP_MODE = 0x01
+    REG_FRF_MSB = 0x06
+    REG_FRF_MID = 0x07
+    REG_FRF_LSB = 0x08
+    REG_LNA = 0x0C
+    REG_FIFO_ADDR_PTR = 0x0D
+    REG_FIFO_TX_BASE_ADDR = 0x0E
+    REG_FIFO_RX_BASE_ADDR = 0x0F
+    REG_FIFO_RX_CURRENT_ADDR = 0x10
+    REG_IRQ_FLAGS = 0x12
+    REG_RX_NB_BYTES = 0x13
+    REG_PKT_SNR_VALUE = 0x19
+    REG_PKT_RSSI_VALUE = 0x1A
+    REG_PREAMBLE_MSB = 0x20
+    REG_PREAMBLE_LSB = 0x21
+    REG_DETECTION_OPTIMIZE = 0x31
+    REG_DETECTION_THRESHOLD = 0x37
+    REG_VERSION = 0x42
+
+    MODE_LONG_RANGE = 0x80
+    MODE_LOW_FREQUENCY = 0x08
+    MODE_SLEEP = 0x00
+    MODE_STDBY = 0x01
+    MODE_RX_CONTINUOUS = 0x05
+
+    IRQ_RX_DONE = 0x40
+    IRQ_PAYLOAD_CRC_ERROR = 0x20
+
+    BW_BINS = (7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000)
+
+    def __init__(
+        self,
+        *,
+        bus: int,
+        device: int,
+        frequency_mhz: float,
+        baudrate: int,
+        reset_bcm: int,
+        spreading_factor: int,
+        signal_bandwidth: int,
+        coding_rate: int,
+        preamble_length: int,
+        sync_word: int,
+        crc: bool,
+        agc: bool,
+    ) -> None:
+        import spidev  # type: ignore
+
+        self.frequency_mhz = frequency_mhz
+        self.last_rssi = 0
+        self.last_snr = 0.0
+
+        self.spi = spidev.SpiDev()
+        self.spi.open(bus, device)
+        self.spi.max_speed_hz = baudrate
+        self.spi.mode = 0
+
+        self._pulse_reset(reset_bcm)
+        if self.read_u8(self.REG_VERSION) != 0x12:
+            version = self.read_u8(self.REG_VERSION)
+            raise RuntimeError(f"SX127x not found on SPI{bus}.{device}: version=0x{version:02X}, expected 0x12")
+
+        self._configure(
+            spreading_factor=spreading_factor,
+            signal_bandwidth=signal_bandwidth,
+            coding_rate=coding_rate,
+            preamble_length=preamble_length,
+            sync_word=sync_word,
+            crc=crc,
+            agc=agc,
+        )
+
+    def _pulse_reset(self, reset_bcm: int) -> None:
+        try:
+            import RPi.GPIO as GPIO  # type: ignore
+
+            GPIO.setwarnings(False)
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(reset_bcm, GPIO.OUT, initial=GPIO.HIGH)
+            time.sleep(0.01)
+            GPIO.output(reset_bcm, GPIO.LOW)
+            time.sleep(0.001)
+            GPIO.output(reset_bcm, GPIO.HIGH)
+            time.sleep(0.01)
+        except Exception:
+            # RST can be tied high; SPI configuration below is enough after power-up.
+            time.sleep(0.01)
+
+    def read_u8(self, address: int) -> int:
+        return int(self.spi.xfer2([address & 0x7F, 0x00])[1]) & 0xFF
+
+    def write_u8(self, address: int, value: int) -> None:
+        self.spi.xfer2([(address | 0x80) & 0xFF, value & 0xFF])
+
+    def read_fifo(self, length: int) -> bytes:
+        if length <= 0:
+            return b""
+        return bytes(self.spi.xfer2([self.REG_FIFO & 0x7F] + [0x00] * length)[1:])
+
+    def _set_mode(self, mode: int) -> None:
+        lf = self.MODE_LOW_FREQUENCY if self.frequency_mhz < 525 else 0x00
+        self.write_u8(self.REG_OP_MODE, self.MODE_LONG_RANGE | lf | mode)
+
+    def _set_frequency(self, mhz: float) -> None:
+        frf = int((mhz * 1_000_000.0) / 61.03515625) & 0xFFFFFF
+        self.write_u8(self.REG_FRF_MSB, (frf >> 16) & 0xFF)
+        self.write_u8(self.REG_FRF_MID, (frf >> 8) & 0xFF)
+        self.write_u8(self.REG_FRF_LSB, frf & 0xFF)
+
+    def _bandwidth_id(self, bandwidth: int) -> int:
+        for idx, cutoff in enumerate(self.BW_BINS):
+            if bandwidth <= cutoff:
+                return idx
+        return 9
+
+    def _configure(
+        self,
+        *,
+        spreading_factor: int,
+        signal_bandwidth: int,
+        coding_rate: int,
+        preamble_length: int,
+        sync_word: int,
+        crc: bool,
+        agc: bool,
+    ) -> None:
+        spreading_factor = min(max(spreading_factor, 6), 12)
+        coding_rate = min(max(coding_rate, 5), 8)
+
+        self._set_mode(self.MODE_SLEEP)
+        time.sleep(0.01)
+        self._set_frequency(self.frequency_mhz)
+        self.write_u8(self.REG_FIFO_TX_BASE_ADDR, 0x00)
+        self.write_u8(self.REG_FIFO_RX_BASE_ADDR, 0x00)
+        self.write_u8(self.REG_LNA, self.read_u8(self.REG_LNA) | 0x03)
+
+        bw = self._bandwidth_id(signal_bandwidth)
+        cr = coding_rate - 4
+        self.write_u8(_REG_MODEM_CONFIG1, (bw << 4) | (cr << 1))  # explicit header
+        self.write_u8(_REG_MODEM_CONFIG2, (spreading_factor << 4) | (0x04 if crc else 0x00))
+
+        self.write_u8(self.REG_DETECTION_OPTIMIZE, 0x05 if spreading_factor == 6 else 0x03)
+        self.write_u8(self.REG_DETECTION_THRESHOLD, 0x0C if spreading_factor == 6 else 0x0A)
+        self.write_u8(self.REG_PREAMBLE_MSB, (preamble_length >> 8) & 0xFF)
+        self.write_u8(self.REG_PREAMBLE_LSB, preamble_length & 0xFF)
+        self.write_u8(_REG_SYNC_WORD, sync_word & 0xFF)
+
+        symbol_duration_ms = 1000.0 / (signal_bandwidth / float(1 << spreading_factor))
+        ldo = 0x08 if symbol_duration_ms > 16 else 0x00
+        self.write_u8(_REG_MODEM_CONFIG3, ldo | (0x04 if agc else 0x00))
+
+        self.write_u8(self.REG_IRQ_FLAGS, 0xFF)
+        self.write_u8(self.REG_FIFO_ADDR_PTR, 0x00)
+        self._set_mode(self.MODE_RX_CONTINUOUS)
+
+    def receive(self, *, timeout: float, with_header: bool = True) -> Optional[bytes]:
+        del with_header
+        deadline = time.monotonic() + timeout
+        self._set_mode(self.MODE_RX_CONTINUOUS)
+
+        while time.monotonic() < deadline:
+            if self.read_u8(self.REG_IRQ_FLAGS) & self.IRQ_RX_DONE:
+                break
+            time.sleep(0.005)
+        else:
+            return None
+
+        flags = self.read_u8(self.REG_IRQ_FLAGS)
+        if flags & self.IRQ_PAYLOAD_CRC_ERROR:
+            self.write_u8(self.REG_IRQ_FLAGS, 0xFF)
+            return None
+
+        snr_raw = self.read_u8(self.REG_PKT_SNR_VALUE)
+        if snr_raw & 0x80:
+            snr_raw -= 256
+        self.last_snr = snr_raw / 4.0
+
+        rssi_raw = self.read_u8(self.REG_PKT_RSSI_VALUE)
+        self.last_rssi = rssi_raw - (164 if self.frequency_mhz < 525 else 157)
+
+        length = self.read_u8(self.REG_RX_NB_BYTES)
+        current_addr = self.read_u8(self.REG_FIFO_RX_CURRENT_ADDR)
+        self.write_u8(self.REG_FIFO_ADDR_PTR, current_addr)
+        packet = self.read_fifo(length)
+        self.write_u8(self.REG_IRQ_FLAGS, 0xFF)
+        return packet
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -212,66 +404,22 @@ class LoRaMQTTGateway:
         payload = json.dumps(message, ensure_ascii=False)
         self._mqtt.publish(self.mqtt_topic, payload, qos=0, retain=False)
 
-    def _write_reg(self, rfm9x, address: int, value: int) -> None:
-        writer = getattr(rfm9x, "_write_u8", None)
-        if not callable(writer):
-            raise RuntimeError("adafruit_rfm9x missing _write_u8; cannot set raw LoRa register")
-        writer(address, value & 0xFF)
-
-    def _read_reg(self, rfm9x, address: int) -> int:
-        reader = getattr(rfm9x, "_read_u8", None)
-        if not callable(reader):
-            raise RuntimeError("adafruit_rfm9x missing _read_u8; cannot verify raw LoRa register")
-        return int(reader(address)) & 0xFF
-
-    def _configure_lora(self, rfm9x) -> None:
-        rfm9x.signal_bandwidth = self.lora_signal_bandwidth
-        rfm9x.coding_rate = self.lora_coding_rate
-        rfm9x.spreading_factor = self.lora_spreading_factor
-        rfm9x.preamble_length = self.lora_preamble_length
-        rfm9x.enable_crc = self.lora_crc
-        if hasattr(rfm9x, "auto_agc"):
-            rfm9x.auto_agc = self.lora_agc
-
-        self._write_reg(rfm9x, _REG_SYNC_WORD, self.lora_sync_word)
-
-        # Arduino LoRa.beginPacket(false)/parsePacket() use explicit header mode.
-        modem_config1 = self._read_reg(rfm9x, _REG_MODEM_CONFIG1)
-        self._write_reg(rfm9x, _REG_MODEM_CONFIG1, modem_config1 & 0xFE)
-
     def _init_lora(self):
-        # Import lazily so dev machines without GPIO libs can still import this module.
-        import board  # type: ignore
-        import busio  # type: ignore
-        import digitalio  # type: ignore
-        import adafruit_rfm9x  # type: ignore
-
-        spi = busio.SPI(board.SCK, MOSI=board.MOSI, MISO=board.MISO)
-
-        if self.lora_spi_cs == "CE1":
-            cs_pin = getattr(board, "D7", getattr(board, "CE1"))
-        else:
-            cs_pin = getattr(board, "D8", getattr(board, "CE0"))
-        cs = digitalio.DigitalInOut(cs_pin)
-
-        reset_pin = getattr(board, f"D{self.lora_reset_bcm}", None)
-        if reset_pin is None:
-            # Fallback: some Blinka builds expose BCM pins as GPIOxx
-            reset_pin = getattr(board, f"GPIO{self.lora_reset_bcm}")
-        reset = digitalio.DigitalInOut(reset_pin)
-
-        rfm9x = adafruit_rfm9x.RFM9x(
-            spi,
-            cs,
-            reset,
-            self.lora_frequency_mhz,
-            preamble_length=self.lora_preamble_length,
+        device = 1 if self.lora_spi_cs == "CE1" else 0
+        return SX127xSpidev(
+            bus=0,
+            device=device,
+            frequency_mhz=self.lora_frequency_mhz,
             baudrate=self.lora_spi_baudrate,
-            agc=self.lora_agc,
+            reset_bcm=self.lora_reset_bcm,
+            spreading_factor=self.lora_spreading_factor,
+            signal_bandwidth=self.lora_signal_bandwidth,
+            coding_rate=self.lora_coding_rate,
+            preamble_length=self.lora_preamble_length,
+            sync_word=self.lora_sync_word,
             crc=self.lora_crc,
+            agc=self.lora_agc,
         )
-        self._configure_lora(rfm9x)
-        return rfm9x
 
     def _read_packet(self, rfm9x) -> Tuple[Optional[str], int, float]:
         pkt = rfm9x.receive(timeout=self.lora_rx_timeout_sec, with_header=True)
