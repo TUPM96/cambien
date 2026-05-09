@@ -16,6 +16,69 @@ _REG_SYNC_WORD = 0x39
 _SENSOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+class I2CLcd16x2:
+    ENABLE = 0x04
+    BACKLIGHT = 0x08
+    COMMAND = 0x00
+    DATA = 0x01
+
+    def __init__(self, *, bus: int, address: int, cols: int = 16, rows: int = 2) -> None:
+        from smbus2 import SMBus  # type: ignore
+
+        self.bus = SMBus(bus)
+        self.address = address
+        self.cols = cols
+        self.rows = rows
+        self.backlight = self.BACKLIGHT
+        self._init_display()
+
+    def _write_byte(self, value: int) -> None:
+        self.bus.write_byte(self.address, value | self.backlight)
+
+    def _pulse(self, value: int) -> None:
+        self._write_byte(value | self.ENABLE)
+        time.sleep(0.0005)
+        self._write_byte(value & ~self.ENABLE)
+        time.sleep(0.0001)
+
+    def _write_nibble(self, nibble: int, mode: int) -> None:
+        value = (nibble & 0xF0) | mode
+        self._write_byte(value)
+        self._pulse(value)
+
+    def _write(self, value: int, mode: int = COMMAND) -> None:
+        self._write_nibble(value & 0xF0, mode)
+        self._write_nibble((value << 4) & 0xF0, mode)
+
+    def _init_display(self) -> None:
+        time.sleep(0.05)
+        for _ in range(3):
+            self._write_nibble(0x30, self.COMMAND)
+            time.sleep(0.005)
+        self._write_nibble(0x20, self.COMMAND)
+        self._write(0x28)  # 4-bit, 2-line, 5x8 dots.
+        self._write(0x0C)  # Display on, cursor off.
+        self._write(0x06)  # Entry mode: increment.
+        self.clear()
+
+    def clear(self) -> None:
+        self._write(0x01)
+        time.sleep(0.002)
+
+    def line(self, row: int, text: str) -> None:
+        offsets = (0x00, 0x40, 0x14, 0x54)
+        row = max(0, min(row, self.rows - 1))
+        clean = text.encode("ascii", errors="replace").decode("ascii")[: self.cols].ljust(self.cols)
+        self._write(0x80 | offsets[row])
+        for ch in clean:
+            self._write(ord(ch), self.DATA)
+
+    def message(self, line1: str, line2: str = "") -> None:
+        self.line(0, line1)
+        if self.rows > 1:
+            self.line(1, line2)
+
+
 class SX127xSpidev:
     REG_FIFO = 0x00
     REG_OP_MODE = 0x01
@@ -373,6 +436,13 @@ class LoRaMQTTGateway:
         self.lora_crc = _env_bool("LORA_CRC", False)
         self.lora_agc = _env_bool("LORA_AGC", True)
 
+        self.lcd_enable = _env_bool("LCD_ENABLE", True)
+        self.lcd_i2c_bus = int(os.getenv("LCD_I2C_BUS", "1"))
+        self.lcd_i2c_addr = _env_int("LCD_I2C_ADDR", 0x27)
+        self.lcd_cols = int(os.getenv("LCD_COLS", "16"))
+        self.lcd_rows = int(os.getenv("LCD_ROWS", "2"))
+        self._lcd: Optional[I2CLcd16x2] = None
+
         self.print_packets = _env_bool("LORA_PRINT_PACKETS", True)
         # Nếu node không gửi validMask, coi giá trị 0 của các field này là "mất dữ liệu".
         # Ví dụ: "water_temperature,tds,ph"
@@ -390,6 +460,46 @@ class LoRaMQTTGateway:
         )
         if self.mqtt_user:
             self._mqtt.username_pw_set(self.mqtt_user, self.mqtt_pass or "")
+
+        self._init_lcd()
+
+    def _init_lcd(self) -> None:
+        if not self.lcd_enable:
+            return
+        try:
+            self._lcd = I2CLcd16x2(
+                bus=self.lcd_i2c_bus,
+                address=self.lcd_i2c_addr,
+                cols=self.lcd_cols,
+                rows=self.lcd_rows,
+            )
+            self._lcd_message("LoRa Gateway", "Init...")
+        except Exception as e:
+            self._lcd = None
+            print(f"LCD init failed: {e}")
+
+    def _lcd_message(self, line1: str, line2: str = "") -> None:
+        if not self._lcd:
+            return
+        try:
+            self._lcd.message(line1, line2)
+        except Exception as e:
+            print(f"LCD update failed: {e}")
+            self._lcd = None
+
+    def _lcd_status(self, mqtt_ok: bool, lora_ok: bool, line2: str = "") -> None:
+        mqtt_text = "MQTT:OK" if mqtt_ok else "MQTT:FAIL"
+        lora_text = "LoRa:OK" if lora_ok else "LoRa:FAIL"
+        self._lcd_message(f"{mqtt_text} {lora_text}", line2[: self.lcd_cols])
+
+    def _lcd_packet(self, message: dict, rssi: int) -> None:
+        sid = str(message.get("sensor_id", "---"))[:4]
+        valid_mask = int(message.get("valid_mask", 0))
+        temp = float(message.get("temperature", 0))
+        tds = float(message.get("tds", 0))
+        ph = float(message.get("ph", 0))
+        temp_text = f"A:{temp:.1f}" if (valid_mask & 0x01) else "A:ERR"
+        self._lcd_message(f"{sid} {temp_text} R:{rssi}", f"pH:{ph:.2f} T:{tds:.0f}")
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -459,13 +569,16 @@ class LoRaMQTTGateway:
     def _run(self) -> None:
         if not self._mqtt_connect():
             print("MQTT connect failed (gateway).")
+            self._lcd_status(mqtt_ok=False, lora_ok=False, line2="Check network")
             return
         self._mqtt.loop_start()
+        self._lcd_status(mqtt_ok=True, lora_ok=False, line2="LoRa init...")
 
         try:
             rfm9x = self._init_lora()
         except Exception as e:
             print(f"LoRa init failed on Pi: {e}")
+            self._lcd_status(mqtt_ok=True, lora_ok=False, line2="LoRa init fail")
             return
 
         self.stats.last_packet_ms = _monotonic_ms()
@@ -476,6 +589,7 @@ class LoRaMQTTGateway:
             f"CR=4/{self.lora_coding_rate}, preamble={self.lora_preamble_length}, "
             f"sync=0x{self.lora_sync_word:02X}, crc={'on' if self.lora_crc else 'off'})"
         )
+        self._lcd_status(mqtt_ok=True, lora_ok=True, line2="Waiting LoRa...")
 
         while not self._stop.is_set():
             msg, rssi, snr = self._read_packet(rfm9x)
@@ -528,6 +642,7 @@ class LoRaMQTTGateway:
                 }
 
                 self._publish(out)
+                self._lcd_packet(out, rssi)
                 if self.print_packets:
                     print(f"LoRa rx: {msg} | rssi={rssi} snr={snr:.2f} -> MQTT {self.mqtt_topic}")
 
@@ -535,6 +650,7 @@ class LoRaMQTTGateway:
                 idle_sec = (now_ms - self.stats.last_packet_ms) / 1000.0
                 if idle_sec > self.lora_lost_signal_sec:
                     print(f"WARNING: No LoRa packet for {self.lora_lost_signal_sec:.0f}s")
+                    self._lcd_status(mqtt_ok=True, lora_ok=True, line2="No LoRa packet")
                     self.stats.last_packet_ms = now_ms
 
             time.sleep(0.05)

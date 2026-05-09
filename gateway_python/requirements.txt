@@ -6,3 +6,6 @@ python-dotenv>=1.0.0
 
 # Raspberry Pi LoRa (SX127x/RFM9x) via SPI
 spidev>=3.6
+
+# Raspberry Pi LCD 16x2 I2C (PCF8574 backpack)
+smbus2>=0.4.3

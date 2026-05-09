@@ -38,6 +38,8 @@ cp .env.example .env
     - Tham số phải khớp node ESP32: `LORA_SPREADING_FACTOR=7`, `LORA_SIGNAL_BANDWIDTH=125000`, `LORA_CODING_RATE=5`, `LORA_PREAMBLE_LENGTH=8`, `LORA_SYNC_WORD=0x12`, `LORA_CRC=0`
   - **Fallback “0 = mất dữ liệu”** (khi node *không gửi* `validMask`):
     - `FALLBACK_ZERO_INVALID_FIELDS=temperature,humidity,water_temperature,tds,ph`
+  - **LCD 16x2 I2C**:
+    - `LCD_ENABLE=1`, `LCD_I2C_ADDR=0x27` hoặc `0x3f`
   - **Web**: `WEB_PORT`
 
 Node con hiện gửi raw LoRa string bằng `LoRa.print(message)`, không có RadioHead header:
@@ -81,6 +83,7 @@ Mặc định code dùng **SPI0** và chọn **CS = CE0** (`LORA_SPI_CS=CE0`).
 ### 5) Ghi chú phần cứng
 
 - LoRa module phổ biến (SX1278/RFM98/RFM95) chạy mức **3.3V logic**. Không cấp 5V.
+- LCD 16x2 I2C: `SDA -> GPIO2/pin 3`, `SCL -> GPIO3/pin 5`, `GND -> GND`, `VCC -> 5V` hoặc `3V3` tùy module. Bật I2C bằng `sudo raspi-config`.
 - Nếu bạn thấy **không nhận gói**:
   - kiểm tra tần số `LORA_FREQUENCY_MHZ=433.0`
   - kiểm tra dây SPI đúng pin, và SPI đã enable
