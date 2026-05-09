@@ -249,9 +249,9 @@ class LoRaMQTTGateway:
         spi = busio.SPI(board.SCK, MOSI=board.MOSI, MISO=board.MISO)
 
         if self.lora_spi_cs == "CE1":
-            cs_pin = board.CE1
+            cs_pin = getattr(board, "D7", getattr(board, "CE1"))
         else:
-            cs_pin = board.CE0
+            cs_pin = getattr(board, "D8", getattr(board, "CE0"))
         cs = digitalio.DigitalInOut(cs_pin)
 
         reset_pin = getattr(board, f"D{self.lora_reset_bcm}", None)
