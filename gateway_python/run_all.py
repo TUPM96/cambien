@@ -4,7 +4,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from gateway_lora_mqtt import LoRaMQTTGateway
+from gateway_lora_mqtt import LoRaGateway
 
 
 def _pick_listen_port(preferred: int, span: int = 40) -> int:
@@ -27,7 +27,7 @@ def main() -> None:
     base_dir = Path(__file__).resolve().parent
     load_dotenv(base_dir / ".env")
 
-    gw = LoRaMQTTGateway()
+    gw = LoRaGateway()
     gw.start()
 
     import uvicorn

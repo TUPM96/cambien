@@ -12,13 +12,13 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <h1>IUH LoRa</h1>
-        <p class="topic" id="mqttTopic"></p>
+        <p class="topic" id="dataSource"></p>
       </div>
       <div class="tabs">
         <button type="button" class="tab active" data-tab="cam-bien">Cảm biến</button>
       </div>
       <div class="sensor-list" id="sensorList">
-        <p class="empty-hint">Đang chờ dữ liệu MQTT…</p>
+        <p class="empty-hint">Đang chờ dữ liệu LoRa…</p>
       </div>
       <div class="status-bar" id="statusBar">—</div>
     </aside>
@@ -82,7 +82,7 @@
       const el = document.getElementById("sensorList");
       const ids = Object.keys(nodes).sort();
       if (!ids.length) {
-        el.innerHTML = '<p class="empty-hint">Chưa có node. Kiểm tra broker và topic.</p>';
+        el.innerHTML = '<p class="empty-hint">Chưa có node. Kiểm tra LoRa gateway và node cảm biến.</p>';
         return;
       }
       el.innerHTML = ids.map((id) => {
@@ -385,7 +385,7 @@
       try {
         const r = await fetch("/api/state");
         const j = await r.json();
-        document.getElementById("mqttTopic").textContent = "Chủ đề MQTT: " + (j.topic || "");
+        document.getElementById("dataSource").textContent = "Nguồn dữ liệu: " + (j.source || "");
         renderSidebar(j.nodes || {});
         updateCharts(j.nodes || {});
         renderCapture(j.nodes || {}, j.capture_config || {});
@@ -396,7 +396,7 @@
       }
     }
 
-    document.getElementById("mqttTopic").textContent = "Chủ đề MQTT: {{ mqtt_topic }}";
+    document.getElementById("dataSource").textContent = "Nguồn dữ liệu: {{ data_source }}";
     ensureCharts();
     poll();
     setInterval(poll, 1500);

@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import threading
@@ -6,8 +5,9 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
+
+from data_store import ingest_gateway_message
 
 _REG_MODEM_CONFIG1 = 0x1D
 _REG_MODEM_CONFIG2 = 0x1E
@@ -408,16 +408,10 @@ class LoRaStats:
     last_packet_ms: int = 0
 
 
-class LoRaMQTTGateway:
+class LoRaGateway:
     def __init__(self) -> None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         load_dotenv(os.path.join(base_dir, ".env"))
-
-        self.mqtt_host = os.getenv("MQTT_HOST", "103.146.22.13")
-        self.mqtt_port = int(os.getenv("MQTT_PORT", "1883"))
-        self.mqtt_user = os.getenv("MQTT_USER", "user1")
-        self.mqtt_pass = os.getenv("MQTT_PASS", "12345678")
-        self.mqtt_topic = os.getenv("MQTT_TOPIC", "sensor/lora/data")
 
         self.lora_frequency_mhz = float(os.getenv("LORA_FREQUENCY_MHZ", "433.0"))
         self.lora_spi_cs = os.getenv("LORA_SPI_CS", "CE0").strip().upper()
@@ -453,14 +447,6 @@ class LoRaMQTTGateway:
 
         self.stats = LoRaStats()
 
-        self._mqtt = mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            client_id=f"lora_gw_pi_{os.getpid()}",
-            protocol=mqtt.MQTTv311,
-        )
-        if self.mqtt_user:
-            self._mqtt.username_pw_set(self.mqtt_user, self.mqtt_pass or "")
-
         self._init_lcd()
 
     def _init_lcd(self) -> None:
@@ -487,10 +473,10 @@ class LoRaMQTTGateway:
             print(f"LCD update failed: {e}")
             self._lcd = None
 
-    def _lcd_status(self, mqtt_ok: bool, lora_ok: bool, line2: str = "") -> None:
-        mqtt_text = "MQTT:OK" if mqtt_ok else "MQTT:FAIL"
+    def _lcd_status(self, web_ok: bool, lora_ok: bool, line2: str = "") -> None:
+        web_text = "WEB:OK" if web_ok else "WEB:FAIL"
         lora_text = "LoRa:OK" if lora_ok else "LoRa:FAIL"
-        self._lcd_message(f"{mqtt_text} {lora_text}", line2[: self.lcd_cols])
+        self._lcd_message(f"{web_text} {lora_text}", line2[: self.lcd_cols])
 
     def _lcd_packet(self, message: dict, rssi: int) -> None:
         sid = str(message.get("sensor_id", "---"))[:4]
@@ -509,23 +495,6 @@ class LoRaMQTTGateway:
 
     def stop(self) -> None:
         self._stop.set()
-        try:
-            self._mqtt.disconnect()
-        except Exception:
-            pass
-
-    def _mqtt_connect(self) -> bool:
-        for _ in range(5):
-            try:
-                self._mqtt.connect(self.mqtt_host, self.mqtt_port, keepalive=60)
-                return True
-            except Exception:
-                time.sleep(2)
-        return False
-
-    def _publish(self, message: dict) -> None:
-        payload = json.dumps(message, ensure_ascii=False)
-        self._mqtt.publish(self.mqtt_topic, payload, qos=0, retain=False)
 
     def _init_lora(self):
         device = 1 if self.lora_spi_cs == "CE1" else 0
@@ -567,18 +536,13 @@ class LoRaMQTTGateway:
         return "Rat yeu"
 
     def _run(self) -> None:
-        if not self._mqtt_connect():
-            print("MQTT connect failed (gateway).")
-            self._lcd_status(mqtt_ok=False, lora_ok=False, line2="Check network")
-            return
-        self._mqtt.loop_start()
-        self._lcd_status(mqtt_ok=True, lora_ok=False, line2="LoRa init...")
+        self._lcd_status(web_ok=True, lora_ok=False, line2="LoRa init...")
 
         try:
             rfm9x = self._init_lora()
         except Exception as e:
             print(f"LoRa init failed on Pi: {e}")
-            self._lcd_status(mqtt_ok=True, lora_ok=False, line2="LoRa init fail")
+            self._lcd_status(web_ok=True, lora_ok=False, line2="LoRa init fail")
             return
 
         self.stats.last_packet_ms = _monotonic_ms()
@@ -589,7 +553,7 @@ class LoRaMQTTGateway:
             f"CR=4/{self.lora_coding_rate}, preamble={self.lora_preamble_length}, "
             f"sync=0x{self.lora_sync_word:02X}, crc={'on' if self.lora_crc else 'off'})"
         )
-        self._lcd_status(mqtt_ok=True, lora_ok=True, line2="Waiting LoRa...")
+        self._lcd_status(web_ok=True, lora_ok=True, line2="Waiting LoRa...")
 
         while not self._stop.is_set():
             msg, rssi, snr = self._read_packet(rfm9x)
@@ -641,16 +605,16 @@ class LoRaMQTTGateway:
                     "signal_quality": self._signal_quality(rssi, snr),
                 }
 
-                self._publish(out)
+                ingest_gateway_message(out)
                 self._lcd_packet(out, rssi)
                 if self.print_packets:
-                    print(f"LoRa rx: {msg} | rssi={rssi} snr={snr:.2f} -> MQTT {self.mqtt_topic}")
+                    print(f"LoRa rx: {msg} | rssi={rssi} snr={snr:.2f} -> dashboard")
 
             if self.lora_lost_signal_sec > 0:
                 idle_sec = (now_ms - self.stats.last_packet_ms) / 1000.0
                 if idle_sec > self.lora_lost_signal_sec:
                     print(f"WARNING: No LoRa packet for {self.lora_lost_signal_sec:.0f}s")
-                    self._lcd_status(mqtt_ok=True, lora_ok=True, line2="No LoRa packet")
+                    self._lcd_status(web_ok=True, lora_ok=True, line2="No LoRa packet")
                     self.stats.last_packet_ms = now_ms
 
             time.sleep(0.05)

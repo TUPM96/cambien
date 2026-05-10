@@ -3,8 +3,8 @@
 Thư mục này thay thế `gateway/` (ESP32) bằng gateway chạy trên **Raspberry Pi 4**:
 
 - **Nhận LoRa (433MHz)** từ node (payload: `ID:temp:hum:waterTemp:tds:ph:validMask`)
-- **Publish MQTT** đúng schema JSON như ESP32 (`sensor/lora/data`)
-- **Chạy web dashboard** (FastAPI) để xem dữ liệu và lưu CSV
+- **Cập nhật trực tiếp web dashboard** (FastAPI) bằng state nội bộ, không cần MQTT broker
+- **Lưu CSV** trong `web/data/`
 
 ### 1) Cài đặt (trên Raspberry Pi OS)
 
@@ -30,7 +30,6 @@ cp .env.example .env
 ```
 
 - Sửa `.env` nếu cần:
-  - **MQTT**: `MQTT_HOST`, `MQTT_PORT`, `MQTT_USER`, `MQTT_PASS`, `MQTT_TOPIC`
   - **LoRa**:
     - `LORA_FREQUENCY_MHZ` (mặc định `433.0`)
     - `LORA_SPI_CS` = `CE0` hoặc `CE1`
@@ -60,6 +59,14 @@ python run_all.py
 ```
 
 Mở web: `http://<ip_pi>:8000` (nếu cổng 8000 bận sẽ tự nhảy sang cổng kế tiếp).
+
+Workflow hiện tại:
+
+```text
+Node ESP32 -> LoRa -> gateway_python -> state noi bo -> FastAPI /api/state -> web
+```
+
+Không còn vòng gửi qua MQTT để hiển thị dashboard.
 
 ### 4) Cắm chân LoRa vào Raspberry Pi 4 (SPI0)
 
