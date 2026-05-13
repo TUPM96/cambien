@@ -481,11 +481,17 @@ class LoRaGateway:
     def _lcd_packet(self, message: dict, rssi: int) -> None:
         sid = str(message.get("sensor_id", "---"))[:4]
         valid_mask = int(message.get("valid_mask", 0))
-        temp = float(message.get("temperature", 0))
+        status = message.get("sensor_status") or {}
+        water_temp = float(message.get("water_temperature", 0))
         tds = float(message.get("tds", 0))
         ph = float(message.get("ph", 0))
-        temp_text = f"A:{temp:.1f}" if (valid_mask & 0x01) else "A:ERR"
-        self._lcd_message(f"{sid} {temp_text} R:{rssi}", f"pH:{ph:.2f} T:{tds:.0f}")
+        water_ok = bool(status.get("water_temp", (valid_mask & 0x04) != 0))
+        tds_ok = bool(status.get("tds", (valid_mask & 0x08) != 0))
+        ph_ok = bool(status.get("ph", (valid_mask & 0x10) != 0))
+        water_text = f"W:{water_temp:.1f}" if water_ok else "W:ERR"
+        tds_text = f"T:{tds:.0f}" if tds_ok else "T:ERR"
+        ph_text = f"pH:{ph:.1f}" if ph_ok else "pH:ERR"
+        self._lcd_message(f"{sid} {water_text}", f"{tds_text} {ph_text}")
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
