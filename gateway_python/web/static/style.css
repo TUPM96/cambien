@@ -162,6 +162,15 @@ body {
   max-height: 220px;
 }
 
+.loss-chart-box {
+  grid-column: 1 / -1;
+  min-height: 320px;
+}
+
+.loss-chart-box canvas {
+  max-height: 270px;
+}
+
 .capture-box {
   grid-column: 1 / -1;
   min-height: auto;
