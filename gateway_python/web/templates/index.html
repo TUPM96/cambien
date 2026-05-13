@@ -92,6 +92,8 @@
       el.innerHTML = ids.map((id) => {
         const L = nodes[id].latest;
         if (!L) return "";
+        const q = L.signal_quality || "";
+        const qc = qualityClass(q);
         return `
           <article class="sensor-card">
             <h3>${id}</h3>
@@ -99,6 +101,9 @@
               <dt>Nhiệt độ nước</dt><dd>${L.water_temp_valid ? L.water_temperature.toFixed(1) + " °C" : "Mất dữ liệu"}</dd>
               <dt>TDS</dt><dd>${L.tds_valid ? L.tds.toFixed(0) + " ppm" : "Mất dữ liệu"}</dd>
               <dt>pH</dt><dd>${L.ph_valid ? L.ph.toFixed(2) : "Mất dữ liệu"}</dd>
+              <dt>RSSI</dt><dd>${L.rssi != null ? L.rssi + " dBm" : "—"}</dd>
+              <dt>SNR</dt><dd>${L.snr != null ? L.snr.toFixed(2) + " dB" : "—"}</dd>
+              <dt>Chất lượng</dt><dd class="${qc}">${q || "—"}</dd>
             </dl>
           </article>`;
       }).join("");
