@@ -198,9 +198,9 @@ void loop() {
   // Hiển thị LCD
   lcd.clear();
   lcd.setCursor(0,0);
-  lcd.print(String(SENSOR_ID) + " A:" + String(temp,1));
+  lcd.print(String(SENSOR_ID) + " W:" + (waterValid ? String(waterTemp,1) : "ERR"));
   lcd.setCursor(0,1);
-  lcd.print("pH:" + String(ph,2) + " T:" + String(tds,0));
+  lcd.print("T:" + (tdsValid ? String(tds,0) : "ERR") + " pH:" + (phValid ? String(ph,1) : "ERR"));
 
   unsigned long elapsed = millis() - loopStart;
   if (elapsed < SEND_INTERVAL_MS) {

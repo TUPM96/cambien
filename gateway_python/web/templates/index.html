@@ -53,6 +53,10 @@
           <h3>RSSI theo thời gian</h3>
           <canvas id="chartRssiLine"></canvas>
         </div>
+        <div class="chart-box">
+          <h3>So sánh mất gói theo node (%)</h3>
+          <canvas id="chartLossCompare"></canvas>
+        </div>
         <div class="chart-box capture-box">
           <h3>Chất lượng nhận gói theo node (kỳ vọng vs thực nhận)</h3>
           <div id="capturePanel" class="capture-panel">
@@ -88,26 +92,19 @@
       el.innerHTML = ids.map((id) => {
         const L = nodes[id].latest;
         if (!L) return "";
-        const q = L.signal_quality || "";
-        const qc = qualityClass(q);
         return `
           <article class="sensor-card">
             <h3>${id}</h3>
             <dl>
-              <dt>Nhiệt độ</dt><dd>${L.air_temp_valid ? L.temperature.toFixed(1) + " °C" : "Mất dữ liệu"}</dd>
-              <dt>Độ ẩm</dt><dd>${L.humidity_valid ? L.humidity.toFixed(1) + " %" : "Mất dữ liệu"}</dd>
               <dt>Nhiệt độ nước</dt><dd>${L.water_temp_valid ? L.water_temperature.toFixed(1) + " °C" : "Mất dữ liệu"}</dd>
               <dt>TDS</dt><dd>${L.tds_valid ? L.tds.toFixed(0) + " ppm" : "Mất dữ liệu"}</dd>
               <dt>pH</dt><dd>${L.ph_valid ? L.ph.toFixed(2) : "Mất dữ liệu"}</dd>
-              <dt>RSSI</dt><dd>${L.rssi != null ? L.rssi + " dBm" : "—"}</dd>
-              <dt>SNR</dt><dd>${L.snr != null ? L.snr.toFixed(2) + " dB" : "—"}</dd>
-              <dt>Chất lượng</dt><dd class="${qc}">${q || "—"}</dd>
             </dl>
           </article>`;
       }).join("");
     }
 
-    let chartTemp, chartHum, chartWaterTemp, chartTds, chartPh, chartRssiBar, chartRssiLine;
+    let chartTemp, chartHum, chartWaterTemp, chartTds, chartPh, chartRssiBar, chartRssiLine, chartLossCompare;
 
     function ensureCharts() {
       const common = {
@@ -182,6 +179,27 @@
           options: { ...common, scales: { ...common.scales, y: { ...common.scales.y, min: 0, max: 14, title: { display: true, text: "pH", color: "#8b9cb3" } } } }
         });
       }
+      if (!chartLossCompare) {
+        chartLossCompare = new Chart(document.getElementById("chartLossCompare"), {
+          type: "bar",
+          data: { labels: [], datasets: [{ label: "Mất gói (%)", data: [], backgroundColor: [] }] },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: "#8b9cb3" }, grid: { color: "#2d3a4f" } },
+              y: {
+                beginAtZero: true,
+                max: 100,
+                ticks: { color: "#8b9cb3" },
+                grid: { color: "#2d3a4f" },
+                title: { display: true, text: "%", color: "#8b9cb3" }
+              }
+            }
+          }
+        });
+      }
     }
 
     function shortTime(iso) {
@@ -251,6 +269,38 @@
         </table>
         <p class="capture-note">Mặc định: ${defaultIntervalSec}s/gói. Có thể chỉnh riêng từng node bằng CAPTURE_INTERVAL_BY_NODE.</p>
       `;
+    }
+
+    function updateLossChart(nodes, captureConfig) {
+      ensureCharts();
+      const ids = Object.keys(nodes).sort();
+      const defaultIntervalSec = Number(captureConfig?.expected_interval_sec || 13);
+      const perNode = captureConfig?.interval_by_node || {};
+      const labels = [];
+      const values = [];
+      const colors = [];
+
+      ids.forEach((id) => {
+        const cap = nodes[id]?.capture || {};
+        const firstSeen = cap.first_seen ? new Date(cap.first_seen) : null;
+        const lastSeen = cap.last_seen ? new Date(cap.last_seen) : null;
+        const durationSec = firstSeen && lastSeen
+          ? Math.max(0, (lastSeen.getTime() - firstSeen.getTime()) / 1000)
+          : 0;
+        const intervalSec = Number(perNode[id] || defaultIntervalSec);
+        const received = Number(cap.received_total || 0);
+        const expected = received > 0 ? Math.max(1, Math.floor(durationSec / intervalSec) + 1) : 0;
+        const lost = Math.max(expected - received, 0);
+        const lossPct = expected > 0 ? (lost * 100 / expected) : 0;
+        labels.push(id);
+        values.push(Number(lossPct.toFixed(1)));
+        colors.push(lossPct <= 5 ? "#4ade80" : (lossPct <= 20 ? "#fbbf24" : "#f87171"));
+      });
+
+      chartLossCompare.data.labels = labels;
+      chartLossCompare.data.datasets[0].data = values;
+      chartLossCompare.data.datasets[0].backgroundColor = colors;
+      chartLossCompare.update("none");
     }
 
     function updateCharts(nodes) {
@@ -388,6 +438,7 @@
         document.getElementById("dataSource").textContent = "Nguồn dữ liệu: " + (j.source || "");
         renderSidebar(j.nodes || {});
         updateCharts(j.nodes || {});
+        updateLossChart(j.nodes || {}, j.capture_config || {});
         renderCapture(j.nodes || {}, j.capture_config || {});
         document.getElementById("statusBar").textContent =
           "Cập nhật: " + new Date().toLocaleTimeString("vi-VN");
